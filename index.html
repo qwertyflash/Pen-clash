@@ -500,6 +500,7 @@ function simTick(){const now=performance.now(),dt=Math.min(.1,simLast?(now-simLa
   ev.forEach(onEvent);G.pens.forEach(p=>{if(!p.alive)p.fall=Math.min(1,p.fall+dt*1.7)});
   if(G.phase==='moving'&&!moving(G.pens)&&G.pens.every(p=>p.alive||p.fall>=1))onSettle();
   if(G.mode==='online')netTick(dt)}
+ if(G&&G.mode==='online'&&!isAuth())guestNet();
  if(net&&net.nr&&net.nr.pulse)net.nr.pulse()}
 try{const wk=new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(0)},16)'],{type:'text/javascript'})));wk.onmessage=simTick;wk.onerror=()=>{setInterval(simTick,16)}}catch(e){setInterval(simTick,16)}
 function frame(ts){requestAnimationFrame(frame);const dt=Math.min(.05,last?(ts-last)/1000:0);last=ts;
@@ -517,7 +518,7 @@ cv.addEventListener('pointerdown',e=>{ac();if(!G||G.phase!=='aim'||!canCtl(G.tur
 cv.addEventListener('pointermove',e=>{if(!drag||!G||G.phase!=='aim')return;const w=toW(e);let px=drag.sx-w.x,py=drag.sy-w.y;const m=Math.hypot(px,py);if(m>MAXPULL){px*=MAXPULL/m;py*=MAXPULL/m}
  G.aim={i:drag.i,t:drag.t,jx:px*KJ,jy:py*KJ};G.dirty=true;if(net&&net.role==='guest')net.nr.presence({aim:[+drag.t.toFixed(3),Math.round(G.aim.jx),Math.round(G.aim.jy)]}).catch(()=>{})});
 function endDrag(){if(!drag)return;const a=G&&G.aim;drag=null;if(!G)return;
- if(a&&Math.hypot(a.jx,a.jy)>MAXJ*.06){if(isAuth())doFlick(a.i,a.t,a.jx,a.jy);else if(net){net.flN++;net.nr.presence({fl:{n:net.flN,t:+a.t.toFixed(3),jx:Math.round(a.jx),jy:Math.round(a.jy)},aim:null}).catch(()=>{});G.aim=null;G.sentAt=performance.now();sfx.flick()}}
+ if(a&&Math.hypot(a.jx,a.jy)>MAXJ*.06){if(isAuth())doFlick(a.i,a.t,a.jx,a.jy);else if(net){net.flN++;net.pf={n:net.flN,t:+a.t.toFixed(3),jx:Math.round(a.jx),jy:Math.round(a.jy)};net.pfAt=performance.now();net.nr.presence({fl:net.pf,aim:null}).catch(()=>{});G.aim=null;G.sentAt=performance.now();sfx.flick()}}
  else{G.aim=null;G.dirty=true;if(net&&net.role==='guest')net.nr.presence({aim:null}).catch(()=>{})}}
 cv.addEventListener('pointerup',endDrag);cv.addEventListener('pointercancel',endDrag);
 
@@ -550,7 +551,7 @@ let mqttLib=null;
 function loadMQTT(){if(window.mqtt&&window.mqtt.connect)return Promise.resolve();if(mqttLib)return mqttLib;
  mqttLib=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=MQTT_URL;sc.onload=()=>res();sc.onerror=()=>{mqttLib=null;rej(new Error('Could not load the networking library. Check your internet connection.'))};document.head.appendChild(sc)});return mqttLib}
 function brokerTry(url,id,T){return new Promise((res,rej)=>{let done=false;
- const c=window.mqtt.connect(url,{clientId:id,clean:true,keepalive:20,connectTimeout:7000,reconnectPeriod:0,will:{topic:T,payload:JSON.stringify({k:'x',id}),qos:0,retain:false}});
+ const c=window.mqtt.connect(url,{clientId:id,clean:true,keepalive:20,connectTimeout:7000,reconnectPeriod:0,will:{topic:T,payload:JSON.stringify({k:'x',id}),qos:1,retain:false}});
  const t=setTimeout(()=>{if(!done){done=true;try{c.end(true)}catch(_){}rej(new Error('timeout'))}},8000);
  c.once('connect',()=>{if(done)return;done=true;clearTimeout(t);res(c)});
  c.once('error',e=>{if(done)return;done=true;clearTimeout(t);try{c.end(true)}catch(_){}rej(e)})})}
@@ -563,7 +564,7 @@ async function relayJoin(code,role){await loadMQTT();
  const list=()=>[{peer:myId,sameTab:true,isMe:true,presence:mine},...[...others].map(([id,o])=>({peer:id,sameTab:false,isMe:false,presence:o.p}))];
  const fire=()=>{if(nq){clearTimeout(nq);nq=0}const ps=list();hs.forEach(h=>{try{h({peers:ps})}catch(e){console.error(e)}})};
  const notify=()=>{if(!nq)nq=setTimeout(fire,0)};let lastHb=0,pendAt=0;
- const pub=m=>{try{if(cli.connected)cli.publish(T,JSON.stringify(m),{qos:0})}catch(e){}};
+ const pub=m=>{try{if(cli.connected)cli.publish(T,JSON.stringify(m),{qos:1})}catch(e){}};
  const merge=(o,q)=>{if(!q||typeof q!=='object')return;for(const k of Object.keys(q)){if(k==='__proto__'||k==='constructor')continue;if(q[k]===null)delete o[k];else o[k]=q[k]}};
  const flush=()=>{clearTimeout(pt);pt=0;if(!pend)return;const q=pend;pend=null;pub({k:'u',id:myId,p:q})};
  cli.on('message',(topic,buf)=>{let m;try{m=JSON.parse(buf.toString())}catch(e){return}
@@ -576,12 +577,13 @@ async function relayJoin(code,role){await loadMQTT();
   else if(m.k==='b'&&!o.full){o.full=true;pub({k:'f',id:myId,p:mine,hello:1})}});
  const beat=()=>{const now=Date.now();if(now-lastHb<2000)return;lastHb=now;pub({k:'b',id:myId});let ch=false;others.forEach((o,id)=>{if(now-o.seen>12000){others.delete(id);ch=true}});if(ch)notify()};
  const hb=setInterval(beat,2000);
+ cli.on('error',()=>{});
  cli.on('close',()=>{if(dead)return;
   setTimeout(()=>{if(!dead)try{cli.reconnect()}catch(_){}},1500)});
- cli.on('connect',()=>{if(dead)return;cli.subscribe(T,{qos:0},()=>pub({k:'f',id:myId,p:mine,hello:1}))});
- await new Promise((res,rej)=>cli.subscribe(T,{qos:0},e=>e?rej(new Error('The relay server refused the match channel. Try again.')):res()));
+ cli.on('connect',()=>{if(dead)return;cli.subscribe(T,{qos:1},()=>pub({k:'f',id:myId,p:mine,hello:1}))});
+ await new Promise((res,rej)=>cli.subscribe(T,{qos:1},e=>e?rej(new Error('The relay server refused the match channel. Try again.')):res()));
  pub({k:'f',id:myId,p:mine,hello:1});
- return{broker:used,pulse(){if(pend&&performance.now()-pendAt>=45)flush();if(nq)fire();beat()},presence(q){merge(mine,q);if(!pend)pendAt=performance.now();pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,50);notify();return Promise.resolve()},
+ return{broker:used,resync(){pub({k:'f',id:myId,p:mine,hello:1})},pulse(){if(pend&&performance.now()-pendAt>=45)flush();if(nq)fire();beat()},presence(q){merge(mine,q);if(!pend)pendAt=performance.now();pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,50);notify();return Promise.resolve()},
   onPeers(h,onErr){hs.push(h);if(onErr)errs.push(onErr);notify();return()=>{hs=hs.filter(x=>x!==h)}},
   peers:list,leave(){dead=true;clearInterval(hb);clearTimeout(pt);try{pub({k:'x',id:myId});cli.end(false)}catch(_){}return Promise.resolve()}}}
 async function joinRoom(code,role){stat('Connecting…');await roomReady;
@@ -608,12 +610,14 @@ function hostRead(g){const gp=g.presence||{};if(!G)return;const rp=remotePl(gp,f
  const fl=gp.fl;if(fl&&typeof fl.n==='number'&&fl.n>net.lastFl){net.lastFl=fl.n;if(G.phase==='aim'&&G.turn===1)doFlick(1,num(fl.t,-.45,.45),num(fl.jx,-MAXJ,MAXJ),num(fl.jy,-MAXJ,MAXJ))}
  if(typeof gp.rm==='number'&&gp.rm>net.lastRm){net.lastRm=gp.rm;if(G.phase==='over')startMatch()}
  const a=gp.aim;G.raim=Array.isArray(a)&&G.phase==='aim'&&G.turn===1?{i:1,t:num(a[0],-.45,.45),jx:num(a[1],-MAXJ,MAXJ),jy:num(a[2],-MAXJ,MAXJ)}:null}
-function netTick(dt){net&&(net.acc+=dt);if(!net||!net.started||!G)return;if((G.dirty||G.phase==='moving')&&net.acc>=1/15){net.acc=0;G.dirty=false;
- const st={m:G.mid,ph:G.phase,t:G.turn,sc:G.sc,rd:G.rd,g:net.opp,w:G.winner,b:G.msg||null,h:G.hx||null,
+/* The host re-sends the full state every ~0.5s even when nothing changed, so a dropped
+   message can never leave the other laptop stuck on an old turn. */
+function netTick(dt){if(net){net.acc+=dt;net.keep=(net.keep||0)+dt}if(!net||!net.started||!G)return;if((G.dirty||G.phase==='moving'||net.keep>=.5)&&net.acc>=1/15){net.acc=0;net.keep=0;G.dirty=false;
+ const st={m:G.mid,ph:G.phase,t:G.turn,sc:G.sc,rd:G.rd,g:net.opp,w:G.winner,b:G.msg||null,h:G.hx||null,fa:net.lastFl,
   p:G.pens.map(p=>[Math.round(p.x),Math.round(p.y),Math.round(p.a*1000),p.alive?1:0]),a:G.aim&&G.phase==='aim'?[+G.aim.t.toFixed(3),Math.round(G.aim.jx),Math.round(G.aim.jy)]:null};
  net.nr.presence({st}).catch(()=>{})}}
-function guestRead(h,P){const st=h.presence.st;if(G)G.stAt=performance.now();if(!st||typeof st!=='object'||!Array.isArray(st.p)){stat('Connected. Waiting for the host to start…');return}
- const spec=st.g!==net.me;
+function guestRead(h,P){const st=h.presence.st;net.hostAt=performance.now();if(G)G.stAt=performance.now();if(!st||typeof st!=='object'||!Array.isArray(st.p)){stat('Connected. Waiting for the host to start…');return}
+ const spec=st.g!==net.me;if(net.pf&&typeof st.fa==='number'&&st.fa>=net.pf.n)net.pf=null;
  if(!G||G.mid!==st.m){let other=spec?P.find(p=>p.peer===st.g):null;
   newGame('online',[remotePl(h.presence,false),spec?remotePl(other&&other.presence||{},false):{...cfg[0],local:true}]);G.mid=st.m;G.me=spec?-1:1;wake();placePens();net.started=true;G.lastRd=-1;show('game');stat('')}
  G.pl[0].name=remotePl(h.presence).name;G.pl[0].av=safeAv(h.presence.av);
@@ -624,8 +628,13 @@ function guestRead(h,P){const st=h.presence.st;if(G)G.stAt=performance.now();if(
  if(Array.isArray(st.b)&&st.b[0]!==G.lastB){G.lastB=st.b[0];banner(String(st.b[1]).slice(0,60),1300)}
  if(Array.isArray(st.h)&&st.h[0]!==G.lastH){G.lastH=st.h[0];onEvent({t:'hit',x:num(st.h[1],0,1000),y:num(st.h[2],0,1000),j:num(st.h[3],0,5000)})}
  G.raim=Array.isArray(st.a)&&G.phase==='aim'&&G.turn===0?{i:0,t:num(st.a[0],-.45,.45),jx:num(st.a[1],-MAXJ,MAXJ),jy:num(st.a[2],-MAXJ,MAXJ)}:null;
- if(G.phase==='aim'&&G.turn===1&&!spec&&G.sentAt&&performance.now()-G.sentAt<1500)G.phase='moving';
+ if(G.phase!=='aim'||G.turn!==1)G.sentAt=0;else if(!spec&&net.pf&&G.sentAt&&performance.now()-G.sentAt<1500)G.phase='moving';
  if(G.phase==='over'&&$('#result').hidden){G.winner=st.w?1:0;showResult()}else if(G.phase!=='over')$('#result').hidden=true}
+/* Guest side: keep re-sending an unacknowledged flick, and ask the host for a fresh copy
+   of everything if its updates stop arriving. */
+function guestNet(){if(!net||!net.started)return;const now=performance.now();
+ if(net.pf&&now-net.pfAt>700){net.pfAt=now;net.nr.presence({fl:{...net.pf}}).catch(()=>{})}
+ if(now-(net.hostAt||now)>2500&&now-(net.rsAt||0)>2500){net.rsAt=now;if(net.nr.resync)net.nr.resync()}}
 function resetTrailTips(){G.pens.forEach(p=>p.tip=null)}
 function guestTick(dt){const k=1-Math.exp(-dt*16);for(const p of G.pens){p.x+=(p.tx-p.x)*k;p.y+=(p.ty-p.y)*k;let da=p.ta-p.a;p.a+=da*k;if(!p.alive)p.fall=Math.min(1,p.fall+dt*1.7)}}
 
