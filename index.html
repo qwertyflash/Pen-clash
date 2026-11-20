@@ -180,7 +180,7 @@ button,input{font:inherit;color:inherit}
    </div>
    <p id="netStatus" class="muted" style="margin:14px 0 0"></p>
   </div>
-  <p class="note">Send your friend the same link. They pick a fighter, tap Online and enter the code. Devices connect directly to each other; anyone extra who joins the code watches as a spectator.</p>
+  <p class="note">Send your friend the same link. They pick a fighter, tap Online and enter the code. Moves travel through a free public relay server, so it works on mobile data and most Wi-Fi. Anyone extra who joins the code watches as a spectator.</p>
  </div>
 </section>
 
@@ -532,55 +532,56 @@ const ALPH='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 $('#mkRoom').onclick=()=>{ac();let c='';for(let k=0;k<4;k++)c+=ALPH[(Math.random()*ALPH.length)|0];joinRoom(c,'host')};
 $('#joinForm').onsubmit=e=>{e.preventDefault();ac();const c=$('#codeIn').value.toUpperCase().replace(/[^A-Z0-9]/g,'');if(c.length!==4){stat('Codes are 4 characters.');return}joinRoom(c,'guest')};
 $('#copyCode').onclick=()=>{const c=$('#codeBig').textContent;try{navigator.clipboard.writeText(c).then(()=>stat('Code copied. Send it to your friend.'),()=>stat('Copy blocked here. Read the code out instead.'))}catch(e){stat('Copy blocked here. Read the code out instead.')}};
-/* PeerJS (WebRTC) transport: works on any static host (Vercel, Netlify, GitHub Pages).
-   Browsers connect directly; the free PeerJS cloud server only introduces them.
-   Self-host signaling by setting window.PEERJS_SERVER={host,port,path,secure} before this script. */
-const PEERJS_URL='https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js';
-const ICE={iceServers:[{urls:'stun:stun.l.google.com:19302'},{urls:'stun:stun1.l.google.com:19302'},{urls:'stun:global.stun.twilio.com:3478'}]};
-let peerLib=null;
-function loadPeerJS(){if(window.Peer)return Promise.resolve();if(peerLib)return peerLib;
- peerLib=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=PEERJS_URL;sc.onload=()=>res();sc.onerror=()=>{peerLib=null;rej(new Error('Could not load the networking library. Check your internet connection.'))};document.head.appendChild(sc)});return peerLib}
-async function peerJoin(code,role){await loadPeerJS();
- const hostId='penclash-v1-'+code.toLowerCase(),opts={config:ICE,debug:0,...(window.PEERJS_SERVER||{})};
- return new Promise((resolve,reject)=>{
-  const P=role==='host'?new window.Peer(hostId,opts):new window.Peer(opts);
-  let myId=null,opened=false,dead=false,nq=0,pend=null,pt=0,hs=[],errs=[],lastErr=null;const mine={},others=new Map(),conns=new Map();
-  const list=()=>[{peer:myId,sameTab:true,isMe:true,presence:mine},...[...others].map(([id,o])=>({peer:id,sameTab:false,isMe:false,presence:o.p}))];
-  const notify=()=>{if(nq)return;nq=setTimeout(()=>{nq=0;const ps=list();hs.forEach(h=>{try{h({peers:ps})}catch(e){console.error(e)}})},0)};
-  const send=(c,m)=>{try{if(c.open)c.send(m)}catch(e){}};
-  const bcast=(m,ex)=>conns.forEach((c,id)=>{if(id!==ex)send(c,m)});
-  const merge=(o,q)=>{if(!q||typeof q!=='object')return;for(const k of Object.keys(q)){if(k==='__proto__')continue;if(q[k]===null)delete o[k];else o[k]=q[k]}};
-  const flush=()=>{pt=0;if(!pend)return;const q=pend;pend=null;bcast({k:'u',id:myId,p:q})};
-  const fail=(code,message)=>{const e={code,message};if(errs.length)errs.forEach(f=>f(e));else lastErr=e};
-  function setup(c){
-   c.on('open',()=>{conns.set(c.peer,c);if(!others.has(c.peer))others.set(c.peer,{p:{}});send(c,{k:'f',id:myId,p:mine});
-    if(role==='host')others.forEach((o,id)=>{if(id!==c.peer)send(c,{k:'f',id,p:o.p})});notify()});
-   c.on('data',m=>{if(!m||typeof m!=='object')return;
-    const id=role==='host'?c.peer:(typeof m.id==='string'?m.id:c.peer);if(id===myId)return;
-    if(m.k==='f'||m.k==='u'){let o=others.get(id);if(!o){o={p:{}};others.set(id,o)}if(m.k==='f')o.p={};merge(o.p,m.p);if(role==='host')bcast({k:m.k,id,p:m.p},c.peer);notify()}
-    else if(m.k==='x'&&role==='guest'){others.delete(m.id);notify()}});
-   c.on('close',()=>{conns.delete(c.peer);if(role==='host'){others.delete(c.peer);bcast({k:'x',id:c.peer})}else others.clear();notify()});
-   c.on('error',()=>{})}
-  if(role==='host')P.on('connection',c=>{if(dead)return;setup(c)});
-  P.on('open',id=>{myId=id;opened=true;clearTimeout(timer);if(role==='guest')setup(P.connect(hostId,{reliable:true,serialization:'json'}));resolve(api)});
-  P.on('error',e=>{const t=e&&e.type||'error';
-   const msg=t==='unavailable-id'?'That code is already in use. Create a new match.':t==='peer-unavailable'?'No match is running with that code yet. Check it, or ask your friend to create one.':
-    (t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed')?'Lost contact with the match server. Check your internet and try again.':t==='browser-incompatible'?'This browser does not support WebRTC peer connections.':'Network error: '+t;
-   if(!opened){clearTimeout(timer);try{P.destroy()}catch(_){}reject(new Error(msg))}else fail(t,msg)});
-  P.on('disconnected',()=>{if(!dead)setTimeout(()=>{try{if(!dead&&P.disconnected&&!P.destroyed)P.reconnect()}catch(_){}},1000)});
-  const timer=setTimeout(()=>{if(!opened){try{P.destroy()}catch(_){}reject(new Error('The match server did not answer. Check your internet and try again.'))}},12000);
-  const api={presence(q){merge(mine,q);pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,33);notify();return Promise.resolve()},
-   onPeers(h,onErr){hs.push(h);if(onErr){errs.push(onErr);if(lastErr){const e=lastErr;lastErr=null;setTimeout(()=>onErr(e),0)}}notify();return()=>{hs=hs.filter(x=>x!==h)}},
-   peers:list,leave(){dead=true;clearTimeout(pt);try{P.destroy()}catch(_){}return Promise.resolve()}};
- })}
+/* Relay transport: both players connect out to a free public MQTT-over-WebSocket broker,
+   which passes messages between them. Works on any static host (Vercel, Netlify...) and any
+   network, since nobody needs to accept an incoming connection.
+   Override brokers with window.MQTT_BROKERS=['wss://your-broker/mqtt'] before this script. */
+const MQTT_URL='https://unpkg.com/mqtt@5.16.1/dist/mqtt.min.js';
+const BROKERS=window.MQTT_BROKERS||['wss://broker.emqx.io:8084/mqtt','wss://broker.hivemq.com:8884/mqtt','wss://test.mosquitto.org:8081/mqtt'];
+let mqttLib=null;
+function loadMQTT(){if(window.mqtt&&window.mqtt.connect)return Promise.resolve();if(mqttLib)return mqttLib;
+ mqttLib=new Promise((res,rej)=>{const sc=document.createElement('script');sc.src=MQTT_URL;sc.onload=()=>res();sc.onerror=()=>{mqttLib=null;rej(new Error('Could not load the networking library. Check your internet connection.'))};document.head.appendChild(sc)});return mqttLib}
+function brokerTry(url,id,T){return new Promise((res,rej)=>{let done=false;
+ const c=window.mqtt.connect(url,{clientId:id,clean:true,keepalive:20,connectTimeout:7000,reconnectPeriod:0,will:{topic:T,payload:JSON.stringify({k:'x',id}),qos:0,retain:false}});
+ const t=setTimeout(()=>{if(!done){done=true;try{c.end(true)}catch(_){}rej(new Error('timeout'))}},8000);
+ c.once('connect',()=>{if(done)return;done=true;clearTimeout(t);res(c)});
+ c.once('error',e=>{if(done)return;done=true;clearTimeout(t);try{c.end(true)}catch(_){}rej(e)})})}
+async function relayJoin(code,role){await loadMQTT();
+ const T='penclash/v2/'+code.toLowerCase(),myId=role[0]+Math.random().toString(36).slice(2,10)+Date.now().toString(36).slice(-4);
+ let cli=null,used='';
+ for(const url of BROKERS){stat('Connecting to relay server ('+url.split('/')[2].split(':')[0]+')…');try{cli=await brokerTry(url,myId,T);used=url;break}catch(e){}}
+ if(!cli)throw new Error('Could not reach any relay server. Check your internet connection (some office or school Wi-Fi blocks these), then try again.');
+ const mine={},others=new Map();let hs=[],errs=[],nq=0,pend=null,pt=0,dead=false;
+ const list=()=>[{peer:myId,sameTab:true,isMe:true,presence:mine},...[...others].map(([id,o])=>({peer:id,sameTab:false,isMe:false,presence:o.p}))];
+ const notify=()=>{if(nq)return;nq=setTimeout(()=>{nq=0;const ps=list();hs.forEach(h=>{try{h({peers:ps})}catch(e){console.error(e)}})},0)};
+ const pub=m=>{try{if(cli.connected)cli.publish(T,JSON.stringify(m),{qos:0})}catch(e){}};
+ const merge=(o,q)=>{if(!q||typeof q!=='object')return;for(const k of Object.keys(q)){if(k==='__proto__'||k==='constructor')continue;if(q[k]===null)delete o[k];else o[k]=q[k]}};
+ const flush=()=>{pt=0;if(!pend)return;const q=pend;pend=null;pub({k:'u',id:myId,p:q})};
+ cli.on('message',(topic,buf)=>{let m;try{m=JSON.parse(buf.toString())}catch(e){return}
+  if(!m||typeof m!=='object'||typeof m.id!=='string'||m.id===myId||m.id.length>40)return;
+  let o=others.get(m.id);
+  if(m.k==='x'){if(o){others.delete(m.id);notify()}return}
+  if(!o){o={p:{},seen:0,full:false};others.set(m.id,o)}o.seen=Date.now();
+  if(m.k==='f'){o.p={};merge(o.p,m.p);o.full=true;if(m.hello)pub({k:'f',id:myId,p:mine});notify()}
+  else if(m.k==='u'){merge(o.p,m.p);if(!o.full){o.full=true;pub({k:'f',id:myId,p:mine,hello:1})}notify()}
+  else if(m.k==='b'&&!o.full){o.full=true;pub({k:'f',id:myId,p:mine,hello:1})}});
+ const hb=setInterval(()=>{pub({k:'b',id:myId});const now=Date.now();let ch=false;others.forEach((o,id)=>{if(now-o.seen>10000){others.delete(id);ch=true}});if(ch)notify()},2000);
+ cli.on('close',()=>{if(dead)return;
+  setTimeout(()=>{if(!dead)try{cli.reconnect()}catch(_){}},1500)});
+ cli.on('connect',()=>{if(dead)return;cli.subscribe(T,{qos:0},()=>pub({k:'f',id:myId,p:mine,hello:1}))});
+ await new Promise((res,rej)=>cli.subscribe(T,{qos:0},e=>e?rej(new Error('The relay server refused the match channel. Try again.')):res()));
+ pub({k:'f',id:myId,p:mine,hello:1});
+ return{broker:used,presence(q){merge(mine,q);pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,50);notify();return Promise.resolve()},
+  onPeers(h,onErr){hs.push(h);if(onErr)errs.push(onErr);notify();return()=>{hs=hs.filter(x=>x!==h)}},
+  peers:list,leave(){dead=true;clearInterval(hb);clearTimeout(pt);try{pub({k:'x',id:myId});cli.end(false)}catch(_){}return Promise.resolve()}}}
 async function joinRoom(code,role){stat('Connecting…');await roomReady;
- try{leaveNet();const nr=roomNS?await roomNS.join('pen-'+code.toLowerCase()):await peerJoin(code,role);
+ try{leaveNet();const nr=roomNS?await roomNS.join('pen-'+code.toLowerCase()):await relayJoin(code,role);
   net={nr,role,code,flN:Date.now(),rmN:Date.now(),lastFl:0,lastRm:0,opp:null,started:false,acc:0,me:null};
   let av=await shrink(cfg[0].av,44,.6);const base={role,name:cfg[0].name,pen:cfg[0].pen};
   try{await nr.presence({...base,av})}catch(e){av=await shrink(cfg[0].av,28,.5);await nr.presence({...base,av}).catch(()=>nr.presence(base))}
   $('#lobbyStart').hidden=true;$('#lobbyWait').hidden=false;$('#codeBig').textContent=code;
-  stat(role==='host'?'Waiting for your opponent to join with this code…':'Looking for the host…');
-  if(role==='guest')net.to=setTimeout(()=>{if(net&&!net.started)stat('No match is running with that code yet. Check it, or ask your friend to create one.')},9000);
+  stat(role==='host'?'Connected. Waiting for your opponent to join with this code…':'Connected to the relay. Looking for the host of '+code+'…');
+  if(role==='guest')net.to=setTimeout(()=>{if(net&&!net.started)stat('No host found for '+code+'. Make sure you both opened the same link, and the host’s screen is still showing this code.')},12000);
   net.un=nr.onPeers(onPeers,e=>{if(net&&net.started)oppLeft(e.message||'Connection lost.');else stat(e.message||('Connection ended ('+e.code+').'))})}
  catch(e){leaveNet();stat(e&&e.message?e.message:'Could not join: '+(e&&e.code||'unknown error'))}}
 function oppLeft(msg){if(!net)return;net.started=false;net.opp=null;if(G){clearTimeout(G.tm);clearTimeout(G.tm2)}G=null;$('#result').hidden=true;show('online');$('#lobbyStart').hidden=true;$('#lobbyWait').hidden=false;stat(msg)}
