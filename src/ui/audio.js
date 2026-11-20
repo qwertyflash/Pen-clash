@@ -31,6 +31,8 @@ export const sfx = {
   fall: () => tone(520, 0.55, 'sine', 0.16, 0.12),
   win: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.2, 'triangle', 0.14), i * 110)),
   tick: () => tone(1300, 0.03, 'triangle', 0.05),
+  pickup: () => [660, 990, 1320].forEach((f, i) => setTimeout(() => tone(f, 0.09, 'triangle', 0.1), i * 60)),
+  crack: () => { tone(160, 0.35, 'sawtooth', 0.2, 0.3); setTimeout(() => tone(90, 0.6, 'square', 0.12, 0.4), 80); },
 };
 
 export function bindMuteButton(btn) {

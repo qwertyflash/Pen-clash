@@ -1,7 +1,8 @@
 // Live "chance to win the match" for each player.
 //
 // 1. This round: every pen still standing gets a strength from how far it is from the
-//    edge (safer = stronger), a bonus if it is their turn, and heavy pens a small edge.
+//    edge (safer = stronger), a bonus if it is their turn, heavy pens a small edge,
+//    frozen or booster-armed pens a bonus and damaged pens a small penalty.
 //    A pen that is out has strength 0.
 // 2. Future rounds are treated as even between the players still in the match.
 // 3. A small exact calculation over the scoreboard (first to `target`) combines both.
@@ -48,6 +49,9 @@ export function winOdds(m) {
     if (!m.inMatch[i] || !p.alive) return 0;
     const safe = clamp01(edgeDist(m.arena, p.x, p.y) / m.arena.r);
     let s = Math.pow(0.12 + safe, 1.6) * (0.85 + 0.15 * p.m);
+    if (p.frozen) s *= 1.4; // hard to knock off until their next turn
+    if (p.arm) s *= 1.15; // a Speed or Fire shot is coming
+    s *= 1 - (p.dmg || 0) / 400;
     if (m.phase === 'aim' && i === m.turn) s *= 1.3;
     return s;
   });

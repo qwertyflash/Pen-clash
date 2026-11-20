@@ -52,3 +52,24 @@ export function drawBadge(c, x, y, avatarUrl, col, sc) {
   if (im) c.drawImage(im, x - r, y - r, 2 * r, 2 * r); else { c.fillStyle = '#fff'; c.fill(); }
   c.restore();
 }
+
+/** Booster glyphs: snowflake (freeze), lightning (speed), flame (fire), centred at (x, y), size s. */
+export function drawGlyph(c, k, x, y, s) {
+  c.save(); c.translate(x, y); c.scale(s / 20, s / 20);
+  c.lineCap = 'round'; c.lineJoin = 'round'; c.strokeStyle = '#0b0b14'; c.fillStyle = '#0b0b14';
+  if (k === 'freeze') {
+    c.lineWidth = 3;
+    for (let a = 0; a < 3; a++) {
+      c.save(); c.rotate((a * Math.PI) / 3);
+      c.beginPath(); c.moveTo(0, -11); c.lineTo(0, 11);
+      c.moveTo(-4, -8); c.lineTo(0, -4.5); c.lineTo(4, -8); c.moveTo(-4, 8); c.lineTo(0, 4.5); c.lineTo(4, 8); c.stroke();
+      c.restore();
+    }
+  } else if (k === 'speed') {
+    c.beginPath(); c.moveTo(3, -12); c.lineTo(-7, 2); c.lineTo(0, 2); c.lineTo(-3, 12); c.lineTo(8, -3); c.lineTo(1, -3); c.closePath(); c.fill();
+  } else {
+    c.beginPath(); c.moveTo(0, -12); c.bezierCurveTo(8, -3, 10, 3, 7, 8); c.bezierCurveTo(4, 12, -4, 12, -7, 8);
+    c.bezierCurveTo(-10, 3, -6, -2, -3, -5); c.bezierCurveTo(-2, -1, 0, 0, 1, -2); c.bezierCurveTo(2, -6, 0, -9, 0, -12); c.closePath(); c.fill();
+  }
+  c.restore();
+}

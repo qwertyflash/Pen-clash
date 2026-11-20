@@ -29,7 +29,8 @@
     <li>On your turn, press anywhere on the arena, drag back like a slingshot and let go. Your pen shoots the opposite way.</li>
     <li>The spot on your pen nearest to where you pressed is where you strike it: press near an end to add spin.</li>
     <li>Knock other pens past the dashed edge. Fall off and you are out for the round. Last pen standing wins the round.</li>
-    <li>First to 3 rounds wins. 2 to 4 players. Heavy pens hit harder, light pens fly further. Pick an arena: ice is slippery, erasers bounce you back.</li>
+    <li>Pick up boosters on the arena: Freeze makes you hard to move until your next turn, Speed powers up your next shot, Fire makes your next shot hit extra hard. Hit a pen 3 times in the same spot and it snaps: PEN BREAK floods the arena with slippery ink.</li>
+    <li>Every round you pick a new pen. First to 3 rounds wins. 2 to 4 players. Heavy pens hit harder, light pens fly further. Pick an arena: ice is slippery, erasers bounce you back.</li>
    </ol>
   </details>
  </div>
@@ -73,6 +74,9 @@
  <div class="stage">
   <canvas id="cv"></canvas>
   <div id="banner" class="banner" aria-live="polite"></div>
+  <div id="picker" class="picker" hidden>
+   <div class="pbox"><div class="phead"><h2 id="pickTitle"></h2><span id="pickTimer" class="ptimer"></span></div><div id="pickGrid" class="pickGrid"></div><p id="pickNote" class="pnote"></p></div>
+  </div>
   <div id="result" class="result" hidden>
    <div class="rbox"><img id="rAv" alt=""><h2 id="rTitle"></h2><p id="rScore"></p>
     <div class="rrow"><button id="rAgain" class="btn pink">Rematch</button><button id="rMenu" class="btn ghost">Menu</button></div>

@@ -11,13 +11,15 @@
 import { PROTOCOL, MAXJ, MAX_PLAYERS, WIN_ROUNDS } from '../core/constants.js';
 import { $, clamp, esc, num } from '../core/util.js';
 import { arenaById } from '../core/arenas.js';
-import { flickPen } from '../core/physics.js';
+import { flickPen, armShot, packPen, unpackExtras } from '../core/physics.js';
+import { packBoosters, unpackBoosters } from '../core/boosters.js';
+import { PENS } from '../core/constants.js';
 import { sfx } from '../ui/audio.js';
 import { PRE, safeAv, shrink } from '../ui/avatars.js';
 import { show, banner } from '../ui/screens.js';
 import { joinNetRoom } from '../net/index.js';
 import { S, isAuth } from './state.js';
-import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock, removePlayer, activeIdx } from './match.js';
+import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock, removePlayer, activeIdx, choosePen } from './match.js';
 
 const VERSION_MSG = 'Someone is on a different version of Pen Clash. Everyone: refresh the page (Ctrl+Shift+R or pull down to reload), then try again.';
 const HOST_KEEPALIVE = 1, HOST_MIN_GAP = 0.1, FLICK_RESEND_MS = 800, RESYNC_MS = 2500;
@@ -204,6 +206,7 @@ function hostRead(k, g) {
     if (G.phase === 'aim' && G.turn === k)
       doFlick(k, num(fl.t, -0.45, 0.45), num(fl.jx, -MAXJ, MAXJ), num(fl.jy, -MAXJ, MAXJ), fl.n);
   }
+  if (gp.pick && typeof gp.pick === 'object' && G.phase === 'pick') choosePen(k, gp.pick.pen, gp.pick.rd);
   if (typeof gp.rm === 'number' && gp.rm > (net.lastRm[id] || 0)) { net.lastRm[id] = gp.rm; if (G.phase === 'over') startMatch(); }
   if (G.turn === k) {
     const a = gp.aim;
@@ -212,14 +215,14 @@ function hostRead(k, g) {
   }
 }
 
-const q3 = (v) => Math.round(v * 1000) / 1000;
 function hostState() {
   const G = S.G, net = S.net;
   const aim = G.phase === 'aim' ? G.aim || G.raim : null;
   return {
     m: G.mid, ar: G.arena.id, ids: net.ids, pl: G.pl.map((p) => [p.name, p.pen]), gone: G.pl.map((p) => (p.gone ? 1 : 0)),
     ph: G.phase, t: G.turn, sc: G.sc, rd: G.rd, w: G.winner, b: G.msg || null, fa: net.lastFl,
-    p: G.pens.map((p) => [q3(p.x), q3(p.y), q3(p.a), p.alive ? 1 : 0]),
+    p: G.pens.map(packPen), bo: packBoosters(G.env), ink: G.env.flood,
+    pk: G.pick ? { rd: G.pick.rd, last: G.pick.last, picks: G.pick.picks, left: Math.max(0, G.pick.until - Date.now()) } : null,
     sh: G.phase === 'moving' ? G.shot : null,
     a: aim ? [aim.i, +aim.t.toFixed(3), Math.round(aim.jx), Math.round(aim.jy)] : null,
   };
@@ -255,8 +258,12 @@ function snapToAuth() {
     const q = G.auth[i];
     if (!q) return;
     p.x = p.tx = q.x; p.y = p.ty = q.y; p.a = p.ta = q.a; p.vx = p.vy = p.w = 0;
+    unpackExtras(p, q.raw);
   });
+  if (G.authEnv) { G.env.boosters = G.authEnv.bo.map((b) => ({ ...b })); G.env.flood = G.authEnv.ink; }
 }
+
+const readFlood = (f) => (f && typeof f === 'object' && typeof f.col === 'string' && /^#[0-9a-f]{6}$/i.test(f.col) ? { col: f.col, i: f.i | 0, x: +f.x || 500, y: +f.y || 500 } : null);
 
 /** Replay a host shot from its recorded start positions. */
 function startReplay(sh) {
@@ -270,8 +277,12 @@ function startReplay(sh) {
     p.x = p.tx = x; p.y = p.ty = y; p.a = p.ta = num(q[2], -1e7, 1e7); p.vx = p.vy = p.w = 0;
     const al = !!q[3];
     if (!al && p.alive) { p.alive = false; p.fall = 1; } else if (al && !p.alive) { p.alive = true; p.fall = 0; }
+    unpackExtras(p, q);
   });
+  G.env.boosters = unpackBoosters(sh.bo);
+  G.env.flood = readFlood(sh.ink);
   const i = clamp(sh.i | 0, 0, G.pens.length - 1);
+  armShot(G.pens[i]);
   flickPen(G.pens[i], num(sh.t, -0.45, 0.45), num(sh.jx, -MAXJ, MAXJ), num(sh.jy, -MAXJ, MAXJ));
   G.sim = true; G.simEnd = 0; resetSimClock();
   sfx.flick();
@@ -286,9 +297,19 @@ export function guestFlick(a) {
   net.nr.presence({ fl: pf, aim: null }).catch(() => {});
   G.aim = null;
   snapToAuth();
+  armShot(G.pens[a.i]);
   flickPen(G.pens[a.i], clamp(pf.t, -0.45, 0.45), pf.jx, pf.jy);
   G.sim = true; G.simEnd = 0; G.pred = pf.n; G.phase = 'moving'; resetSimClock();
   sfx.flick();
+}
+
+/** The guest chose a pen for the coming round. */
+export function guestPick(pen) {
+  const net = S.net, G = S.G;
+  if (!net || !G || !G.pick) return;
+  net.myPick = { rd: G.pick.rd, pen };
+  G.pick.picks[G.me] = pen;
+  net.nr.presence({ pick: { rd: G.pick.rd, pen } }).catch(() => {});
 }
 
 /** Throttled live aim preview for everyone else's screen. */
@@ -329,13 +350,25 @@ function guestRead(h, P) {
     G.pl[k].name = String(q[0] || 'Player').slice(0, 14); G.pl[k].av = avOf(k);
   });
   if (Array.isArray(st.gone)) st.gone.forEach((g, k) => { if (G.pl[k]) G.pl[k].gone = !!g; });
-  if (st.rd !== G.lastRd) { G.lastRd = st.rd; placePens(); G.sim = false; G.pred = 0; }
+  // New round (or new pens picked): put fresh pens on their starting spots.
+  st.pl.forEach((q, k) => { if (k !== G.me && Array.isArray(q)) G.pl[k].pen = clamp(q[1] | 0, 0, PENS.length - 1); });
+  if (G.me > 0 && Array.isArray(st.pl[G.me])) G.pl[G.me].pen = clamp(st.pl[G.me][1] | 0, 0, PENS.length - 1);
+  const layout = st.rd + ':' + G.pl.map((p) => p.pen).join(',');
+  if (st.ph !== 'pick' && layout !== G.layout) { G.layout = layout; placePens(); G.sim = false; G.pred = 0; }
 
-  const ph = ['aim', 'moving', 'between', 'over', 'idle'].includes(st.ph) ? st.ph : 'idle';
+  const ph = ['aim', 'moving', 'between', 'over', 'idle', 'pick'].includes(st.ph) ? st.ph : 'idle';
   G.turn = clamp(st.t | 0, 0, n - 1);
   G.sc = G.pl.map((_, k) => num(Array.isArray(st.sc) ? st.sc[k] : 0, 0, WIN_ROUNDS));
   G.rd = num(st.rd, 1, 99, 1);
-  G.auth = st.p.map((q) => (Array.isArray(q) ? { x: num(q[0], -2000, 3000), y: num(q[1], -2000, 3000), a: num(q[2], -1e7, 1e7), alive: !!q[3] } : null));
+  G.auth = st.p.map((q) => (Array.isArray(q) ? { x: num(q[0], -2000, 3000), y: num(q[1], -2000, 3000), a: num(q[2], -1e7, 1e7), alive: !!q[3], raw: q } : null));
+  G.authEnv = { bo: unpackBoosters(st.bo), ink: readFlood(st.ink) };
+  // Pen choosing between rounds. Our own choice shows right away, before the host confirms it.
+  const pk = st.pk;
+  if (ph === 'pick' && pk && Array.isArray(pk.picks) && pk.picks.length === n) {
+    const picks = pk.picks.map((v) => (typeof v === 'number' ? v | 0 : -1));
+    if (net.myPick && net.myPick.rd === pk.rd && G.me > 0 && picks[G.me] < 0) picks[G.me] = net.myPick.pen;
+    G.pick = { rd: pk.rd | 0, last: Array.isArray(pk.last) ? pk.last.map((v) => v | 0) : picks.map(() => -1), picks, until: Date.now() + num(pk.left, 0, 60000) };
+  } else G.pick = null;
 
   // A new shot: replay it, unless it is the one we already predicted.
   const sh = st.sh;
@@ -368,9 +401,15 @@ export function guestTick(dt) {
       const q = G.auth[i];
       if (!q) return;
       p.tx = q.x; p.ty = q.y; p.ta = q.a;
+      unpackExtras(p, q.raw);
       if (p.alive && !q.alive) { p.alive = false; if (!G.pl[i].gone) onEvent({ t: 'fall', i, x: p.x, y: p.y }); else p.fall = 1; }
       else if (!p.alive && q.alive) { p.alive = true; p.fall = 0; p.x = q.x; p.y = q.y; p.a = q.a; p.tip = null; }
     });
+    if (G.authEnv) {
+      G.env.boosters = G.authEnv.bo;
+      if (!G.env.flood && G.authEnv.ink) G.floodAt = performance.now();
+      G.env.flood = G.authEnv.ink;
+    }
   }
   const k = 1 - Math.exp(-dt * 16);
   for (const p of G.pens) {

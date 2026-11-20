@@ -9,6 +9,16 @@ or online with a 4-letter code.
   last pen standing wins the round. First to 3 rounds wins.
 - **Live win chance**: the bar under the scores estimates each player's chance to win
   the match from the scoreboard, how close each pen is to the edge, and whose turn it is.
+- **New pen every round**: from round 2 everyone picks a pen before the round starts
+  (not the one they just used; 15 s, or one is picked for you).
+- **Boosters** pop up on the arena; slide over one to collect it. It works for one turn:
+  - Freeze: your pen turns to ice, very hard to move, until your next turn.
+  - Speed: your next shot is 50% stronger and glides further.
+  - Fire: your next shot knocks pens back harder and does double damage.
+- **Damage**: every pen shows its damage % and dents where it was hit hard.
+- **PEN BREAK**: hit a pen hard 3 times in the same spot and it snaps. It keeps playing
+  (shown broken for the rest of the round), but its ink floods the arena: everything
+  gets more slippery and pens that slide through it pick up ink stains.
 
 ## Quick start
 
@@ -30,8 +40,8 @@ index.html            page markup (screens: menu, setup, online lobby, game)
 src/
   main.js             entry: wires up UI, render loop, debug panel
   style.css
-  core/               no DOM: constants, arenas, physics, bot AI, win-chance odds
-  ui/                 audio, drawing, avatars, camera, menu, screens
+  core/               no DOM: constants, arenas, physics (damage, breaks, pickups), boosters, bot AI, win-chance odds
+  ui/                 audio, drawing, avatars, camera, menu, pen picker, screens
   game/
     state.js          shared state (current match, online session)
     match.js          rules, rounds, scoring, fixed-step simulation clock

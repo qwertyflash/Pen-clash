@@ -60,6 +60,7 @@ const view = (p) => p.evaluate(() => {
     phase: G.phase, turn: G.turn, rd: G.rd, sc: G.sc.join('-'), sim: G.sim, me: G.me, arena: G.arena.id, n: G.pl.length,
     pens: G.pens.map((p) => [Math.round(p.x * 10) / 10, Math.round(p.y * 10) / 10, p.alive]),
     gone: G.pl.map((p) => !!p.gone),
+    extra: JSON.stringify([G.pens.map((p) => [Math.round(p.dmg), p.broken, p.frozen, p.arm, p.segs.join('')]), G.env.boosters.filter((b) => !b.taken).map((b) => b.k + b.x + ',' + b.y), !!G.env.flood, G.pl.map((p) => p.pen)]),
     path: peer ? S.net.nr.route(peer).path : null,
     odds: [...document.querySelectorAll('#odds i')].map((e) => e.style.flexGrow),
     errors: S.errors,
@@ -103,16 +104,28 @@ await host.click('#startBtn');
 // Seats follow join order, so guest k should be player k.
 for (const [k, g] of pages.entries()) await until(g, (v) => v.me === k && v.n === PLAYERS && v.arena === ARENA, 15000, `player ${k} to enter the match`);
 
-let shots = 0;
+let shots = 0, picks = 0;
 while (shots < SHOTS) {
-  const h = await until(host, (v) => v.phase === 'aim' || v.phase === 'over', 20000, 'host to be ready for a shot');
+  let h = await until(host, (v) => v.phase === 'aim' || v.phase === 'over' || v.phase === 'pick', 20000, 'host to be ready for a shot');
   if (h.phase === 'over') break;
+  if (h.phase === 'pick') {
+    // New round: every player picks a pen on their own screen (last round's pen is locked).
+    for (const [k, g] of pages.entries()) {
+      if (left.has(k)) continue;
+      await g.waitForSelector('#picker:not([hidden]) .pickPen:not([disabled])', { timeout: 10000 });
+      await g.click('#picker .pickPen:not([disabled]) >> nth=' + ((Math.random() * 5) | 0));
+    }
+    const pk = await until(host, (v) => v.phase !== 'pick', 15000, 'everyone to finish picking pens');
+    picks++;
+    console.log(`round ${pk.rd}: everyone picked a new pen`);
+    continue;
+  }
   const shooter = pages[h.turn];
   // The shooter's screen must agree it is their turn...
   const s = await until(shooter, (v) => v.phase === 'aim' && v.turn === h.turn && !v.sim, 15000, `player ${h.turn} to see its turn`);
   // ...and every guest's pens must end up where the host's are (they ease into place).
   const off = (g) => Math.max(...g.pens.map((q, k) => (q[2] && h.pens[k][2] ? Math.hypot(q[0] - h.pens[k][0], q[1] - h.pens[k][1]) : 0)));
-  for (const [k, g] of pages.entries()) if (k && !left.has(k)) await until(g, (v) => !v.sim && v.phase === h.phase && off(v) < 3, 8000, `guest ${k} pens to match the host`);
+  for (const [k, g] of pages.entries()) if (k && !left.has(k)) await until(g, (v) => !v.sim && v.phase === h.phase && off(v) < 3 && v.extra === h.extra, 8000, `guest ${k} to match the host (positions, damage, boosters, flood, pens)`);
   await flick(shooter, h.turn);
   await until(host, (v) => v.phase !== 'aim' || v.turn !== h.turn, 15000, 'host to receive the shot from player ' + h.turn);
   shots++;
@@ -131,6 +144,6 @@ for (const [k, p] of pages.entries()) {
   if (v.errors.length) await fail('errors were reported');
   if (v.odds.length !== PLAYERS) await fail('win-chance bar should have one segment per player');
 }
-console.log(`PASS: ${PLAYERS} players, arena ${ARENA}, ${shots} shots, drop=${DROP}, p2p=${P2P}, final path ${(await view(pages[1])).path}${LEAVE ? ', one player left mid-match' : ''}`);
+console.log(`PASS: ${PLAYERS} players, arena ${ARENA}, ${shots} shots, ${picks} pen picks, drop=${DROP}, p2p=${P2P}, final path ${(await view(pages[1])).path}${LEAVE ? ', one player left mid-match' : ''}`);
 await browser.close();
 srv.kill();

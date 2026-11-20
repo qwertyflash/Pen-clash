@@ -11,14 +11,14 @@
 // ignored.
 import { createLink, p2pSupported } from './p2p.js';
 
-const HB_MS = 2000, STALE_MS = 12000, LINK_IDLE_MS = 7000, LINK_RETRY_MS = 20000;
+const HB_MS = 1000, STALE_MS = 12000, LINK_IDLE_MS = 7000, LINK_RETRY_MS = 20000;
 
 export function createRoom(bus, myId, { p2p = true } = {}) {
   const mine = {}, others = new Map(), links = new Map(), linkFailedAt = new Map(), rtt = new Map();
   let handlers = [], nq = 0, pend = null, pt = 0, pendAt = 0, dead = false, seq = 0, lastHb = 0;
   // Presence version: bumped on every change. Deltas say which version they build on, and
   // heartbeats carry the latest, so a peer that missed a delta notices and asks for a snapshot.
-  let pv = 0, sentPv = 0;
+  let pv = 0, sentPv = 0, fullPv = -1, fullAt = 0;
   const useP2P = p2p && p2pSupported();
   if (useP2P) mine.rtc = 1;
 
@@ -47,7 +47,7 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
   };
   const full = (hello) => {
     // A snapshot includes any change still waiting to be sent.
-    clearTimeout(pt); pt = 0; pend = null; sentPv = pv;
+    clearTimeout(pt); pt = 0; pend = null; sentPv = pv; fullPv = pv; fullAt = Date.now();
     out({ k: 'f', p: mine, pv, ...(hello ? { hello: 1 } : {}) });
   };
   const merge = (o, q) => {
@@ -83,8 +83,14 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
     return link;
   }
 
-  // We heard from a peer we have no snapshot of (e.g. we reconnected): ask, at most every 2 s.
-  const askFull = (o, force) => { if (o.full && !force) return; const now = Date.now(); if (now - (o.asked || 0) > 2000) { o.asked = now; full(true); } };
+  // We have no snapshot of a peer, or we missed one of its changes: ask it for a full
+  // snapshot, and keep asking (once a second, from beat()) until one arrives.
+  const askFull = (o, force) => {
+    if (o.full && !force) return;
+    o.stale = true;
+    const now = Date.now();
+    if (now - (o.asked || 0) > 1000) { o.asked = now; direct(o.id, { k: 'want' }); }
+  };
 
   function recv(raw) {
     if (dead || typeof raw !== 'string' || raw.length > 300000) return;
@@ -100,15 +106,16 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
         if (l) l.signal(m.d);
       } else if (m.k === 'ping') direct(m.id, { k: 'pong', t: m.t });
       else if (m.k === 'pong' && typeof m.t === 'number') rtt.set(m.id, Math.round(performance.now() - m.t));
+      else if (m.k === 'want') full(false);
       return;
     }
 
     let o = others.get(m.id);
     if (m.k === 'x') { if (o) dropPeer(m.id); return; }
-    if (!o) { o = { p: {}, seen: 0, full: false, s: 0 }; others.set(m.id, o); }
+    if (!o) { o = { id: m.id, p: {}, seen: 0, full: false, s: 0 }; others.set(m.id, o); }
     o.seen = Date.now();
     if (typeof m.s === 'number') { if (m.s <= o.s) return; o.s = m.s; }
-    if (m.k === 'f') { o.p = {}; merge(o.p, m.p); o.full = true; o.pv = m.pv; if (m.hello) full(false); notify(); }
+    if (m.k === 'f') { o.p = {}; merge(o.p, m.p); o.full = true; o.stale = false; o.pv = m.pv; if (m.hello) full(false); notify(); }
     else if (m.k === 'u') {
       merge(o.p, m.p);
       if (o.full && m.pp !== o.pv) askFull(o, true); // we missed a change in between
@@ -121,8 +128,11 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
 
   const beat = () => {
     const now = Date.now();
+    for (const o of others.values()) if (o.stale) askFull(o, true);
     if (now - lastHb < HB_MS) return;
     lastHb = now;
+    // Every 8 s, re-send a full snapshot if anything changed since the last one.
+    if (pv !== fullPv && now - fullAt > 8000 && !pend) full(false);
     out({ k: 'b', pv: sentPv });
     for (const [id, o] of others) {
       if (now - o.seen > STALE_MS) { dropPeer(id); continue; }
