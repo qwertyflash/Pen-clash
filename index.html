@@ -483,22 +483,28 @@ function render(ts){const w=cv.width/dpr,h=cv.height/dpr;cx.setTransform(dpr,0,0
  for(const p of G.pens){const sc=1-.55*p.fall,al=1-p.fall;if(al<=0)continue;drawPen(cx,p.d,p.x,p.y,p.a,sc,al);cx.globalAlpha=al;drawBadge(cx,p,COL[p.i],sc);cx.globalAlpha=1}
  const a=G.aim||G.raim;if(a&&G.phase==='aim')drawAim(cx,a);
  for(const q of G.parts){cx.globalAlpha=Math.max(0,q.l/q.m);cx.fillStyle=q.c;cx.beginPath();cx.arc(q.x,q.y,q.s,0,7);cx.fill()}cx.globalAlpha=1}
-function updHud(){const s=JSON.stringify([G.pl.map(p=>[p.name,p.pen,p.av.length]),G.sc,G.turn,G.phase,G.rd]);if(s===G.sig)return;G.sig=s;
+function updHud(){const stall=G.mode==='online'&&!isAuth()&&G.phase==='moving'&&performance.now()-(G.stAt||0)>4000;const s=JSON.stringify([stall,G.pl.map(p=>[p.name,p.pen,p.av.length]),G.sc,G.turn,G.phase,G.rd]);if(s===G.sig)return;G.sig=s;
  [0,1].forEach(i=>{const p=G.pl[i],e=$('#c'+i);e.innerHTML=`<img src="${safeAv(p.av)}" alt=""><div class="ci"><b>${esc(p.name)}${G.me===i||(G.mode==='bot'&&i===0)?' (you)':''}</b><small>${esc(PENS[p.pen].name)}</small><div class="pips">${[0,1,2].map(k=>`<i class="${k<G.sc[i]?'on':''}"></i>`).join('')}</div></div>`;
   e.classList.toggle('act',(G.phase==='aim'||G.phase==='moving')&&G.turn===i)});
  $('#rdLbl').textContent=G.phase==='over'?'Final':'Round '+G.rd;
- const t=G.turn,ht=G.phase!=='aim'?(G.phase==='moving'?'Watch it fly…':G.phase==='over'?'Match over':'Get ready…'):canCtl(t)?'Press anywhere, drag back, release to flick. Press near an end for spin.':G.pl[t].bot?'Inkbot is lining up a shot…':'Waiting for '+G.pl[t].name+'…';
+ const t=G.turn,ht=stall?'Waiting for '+G.pl[0].name+'’s game to respond. They need Pen Clash open on screen.':G.phase!=='aim'?(G.phase==='moving'?'Watch it fly…':G.phase==='over'?'Match over':'Get ready…'):canCtl(t)?'Press anywhere, drag back, release to flick. Press near an end for spin.':G.pl[t].bot?'Inkbot is lining up a shot…':'Waiting for '+G.pl[t].name+'…';
  $('#hint').textContent=(G.me<0&&G.mode==='online'?'Spectating · ':'')+ht}
 
 /* ---------- loop ---------- */
 let last=0;
+/* Game logic runs on a Web Worker clock, which browsers don't pause for background tabs,
+   so an online host keeps the match going even if its tab is hidden. Drawing stays on rAF. */
+let simLast=0;
+function simTick(){const now=performance.now(),dt=Math.min(.1,simLast?(now-simLast)/1000:0);simLast=now;
+ if(G&&G.pens.length&&isAuth()&&G.phase!=='idle'){const sdt=dt*(G.slow>0?.3:1);G.slow=Math.max(0,G.slow-dt);acc+=sdt;const ev=[];let n=0;while(acc>=1/240&&n<120){step(G.pens,1/240,ev);acc-=1/240;n++}
+  ev.forEach(onEvent);G.pens.forEach(p=>{if(!p.alive)p.fall=Math.min(1,p.fall+dt*1.7)});
+  if(G.phase==='moving'&&!moving(G.pens)&&G.pens.every(p=>p.alive||p.fall>=1))onSettle();
+  if(G.mode==='online')netTick(dt)}
+ if(net&&net.nr&&net.nr.pulse)net.nr.pulse()}
+try{const wk=new Worker(URL.createObjectURL(new Blob(['setInterval(function(){postMessage(0)},16)'],{type:'text/javascript'})));wk.onmessage=simTick;wk.onerror=()=>{setInterval(simTick,16)}}catch(e){setInterval(simTick,16)}
 function frame(ts){requestAnimationFrame(frame);const dt=Math.min(.05,last?(ts-last)/1000:0);last=ts;
  if(G&&!$('#game').hidden){
-  if(isAuth()){const sdt=dt*(G.slow>0?.3:1);G.slow=Math.max(0,G.slow-dt);acc+=sdt;const ev=[];let n=0;while(acc>=1/240&&n<40){step(G.pens,1/240,ev);acc-=1/240;n++}
-   ev.forEach(onEvent);G.pens.forEach(p=>{if(!p.alive)p.fall=Math.min(1,p.fall+dt*1.7)});
-   if(G.phase==='moving'&&!moving(G.pens)&&G.pens.every(p=>p.alive||p.fall>=1))onSettle();
-   if(G.mode==='online')netTick(dt)}
-  else guestTick(dt);
+  if(!isAuth())guestTick(dt);
   for(const q of G.parts){q.x+=q.vx*dt;q.y+=q.vy*dt;q.vx*=.9;q.vy*=.9;q.l-=dt}G.parts=G.parts.filter(q=>q.l>0);G.shake*=Math.pow(.02,dt);
   render(ts);updHud()}
  else if(!$('#menu').hidden)drawHero(ts)}
@@ -526,7 +532,9 @@ let roomNS=null,net=null;
 const roomReady=(window.claude&&typeof window.claude.use==='function'?Promise.race([Promise.resolve(window.claude.use('room')).catch(()=>null),new Promise(r=>setTimeout(()=>r(null),4000))]):Promise.resolve(null)).then(r=>roomNS=r);
 const stat=t=>$('#netStatus').textContent=t;
 function lobbyReset(){leaveNet();$('#lobbyStart').hidden=false;$('#lobbyWait').hidden=true;stat('')}
-function leaveNet(){if(net){try{net.un&&net.un()}catch(e){}net.nr.leave().catch(()=>{});clearTimeout(net.to);net=null}}
+let wl=null;function wake(){try{if(navigator.wakeLock&&!wl&&document.visibilityState==='visible')navigator.wakeLock.request('screen').then(l=>{wl=l;l.addEventListener('release',()=>{wl=null})}).catch(()=>{})}catch(e){}}
+document.addEventListener('visibilitychange',()=>{if(net&&net.started)wake()});
+function leaveNet(){try{wl&&wl.release()}catch(e){}wl=null;if(net){try{net.un&&net.un()}catch(e){}net.nr.leave().catch(()=>{});clearTimeout(net.to);net=null}}
 $('#onBack').onclick=()=>{lobbyReset();show('setup')};
 const ALPH='ABCDEFGHJKMNPQRSTUVWXYZ23456789';
 $('#mkRoom').onclick=()=>{ac();let c='';for(let k=0;k<4;k++)c+=ALPH[(Math.random()*ALPH.length)|0];joinRoom(c,'host')};
@@ -553,10 +561,11 @@ async function relayJoin(code,role){await loadMQTT();
  if(!cli)throw new Error('Could not reach any relay server. Check your internet connection (some office or school Wi-Fi blocks these), then try again.');
  const mine={},others=new Map();let hs=[],errs=[],nq=0,pend=null,pt=0,dead=false;
  const list=()=>[{peer:myId,sameTab:true,isMe:true,presence:mine},...[...others].map(([id,o])=>({peer:id,sameTab:false,isMe:false,presence:o.p}))];
- const notify=()=>{if(nq)return;nq=setTimeout(()=>{nq=0;const ps=list();hs.forEach(h=>{try{h({peers:ps})}catch(e){console.error(e)}})},0)};
+ const fire=()=>{if(nq){clearTimeout(nq);nq=0}const ps=list();hs.forEach(h=>{try{h({peers:ps})}catch(e){console.error(e)}})};
+ const notify=()=>{if(!nq)nq=setTimeout(fire,0)};let lastHb=0,pendAt=0;
  const pub=m=>{try{if(cli.connected)cli.publish(T,JSON.stringify(m),{qos:0})}catch(e){}};
  const merge=(o,q)=>{if(!q||typeof q!=='object')return;for(const k of Object.keys(q)){if(k==='__proto__'||k==='constructor')continue;if(q[k]===null)delete o[k];else o[k]=q[k]}};
- const flush=()=>{pt=0;if(!pend)return;const q=pend;pend=null;pub({k:'u',id:myId,p:q})};
+ const flush=()=>{clearTimeout(pt);pt=0;if(!pend)return;const q=pend;pend=null;pub({k:'u',id:myId,p:q})};
  cli.on('message',(topic,buf)=>{let m;try{m=JSON.parse(buf.toString())}catch(e){return}
   if(!m||typeof m!=='object'||typeof m.id!=='string'||m.id===myId||m.id.length>40)return;
   let o=others.get(m.id);
@@ -565,13 +574,14 @@ async function relayJoin(code,role){await loadMQTT();
   if(m.k==='f'){o.p={};merge(o.p,m.p);o.full=true;if(m.hello)pub({k:'f',id:myId,p:mine});notify()}
   else if(m.k==='u'){merge(o.p,m.p);if(!o.full){o.full=true;pub({k:'f',id:myId,p:mine,hello:1})}notify()}
   else if(m.k==='b'&&!o.full){o.full=true;pub({k:'f',id:myId,p:mine,hello:1})}});
- const hb=setInterval(()=>{pub({k:'b',id:myId});const now=Date.now();let ch=false;others.forEach((o,id)=>{if(now-o.seen>10000){others.delete(id);ch=true}});if(ch)notify()},2000);
+ const beat=()=>{const now=Date.now();if(now-lastHb<2000)return;lastHb=now;pub({k:'b',id:myId});let ch=false;others.forEach((o,id)=>{if(now-o.seen>12000){others.delete(id);ch=true}});if(ch)notify()};
+ const hb=setInterval(beat,2000);
  cli.on('close',()=>{if(dead)return;
   setTimeout(()=>{if(!dead)try{cli.reconnect()}catch(_){}},1500)});
  cli.on('connect',()=>{if(dead)return;cli.subscribe(T,{qos:0},()=>pub({k:'f',id:myId,p:mine,hello:1}))});
  await new Promise((res,rej)=>cli.subscribe(T,{qos:0},e=>e?rej(new Error('The relay server refused the match channel. Try again.')):res()));
  pub({k:'f',id:myId,p:mine,hello:1});
- return{broker:used,presence(q){merge(mine,q);pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,50);notify();return Promise.resolve()},
+ return{broker:used,pulse(){if(pend&&performance.now()-pendAt>=45)flush();if(nq)fire();beat()},presence(q){merge(mine,q);if(!pend)pendAt=performance.now();pend=Object.assign(pend||{},q);if(!pt)pt=setTimeout(flush,50);notify();return Promise.resolve()},
   onPeers(h,onErr){hs.push(h);if(onErr)errs.push(onErr);notify();return()=>{hs=hs.filter(x=>x!==h)}},
   peers:list,leave(){dead=true;clearInterval(hb);clearTimeout(pt);try{pub({k:'x',id:myId});cli.end(false)}catch(_){}return Promise.resolve()}}}
 async function joinRoom(code,role){stat('Connecting…');await roomReady;
@@ -593,7 +603,7 @@ function onPeers(ch){if(!net)return;const P=ch.peers,me=P.find(p=>p.sameTab);if(
   clearTimeout(net.to);guestRead(h,P)}}
 function remotePl(pr,local){return{name:String(pr.name||'Player').slice(0,14),pen:clamp(pr.pen|0,0,5),av:safeAv(pr.av),local}}
 function hostStart(g){net.opp=g.peer;net.started=true;const gp=g.presence;net.lastFl=num(gp.fl&&gp.fl.n,0,1e15);net.lastRm=num(gp.rm,0,1e15);
- newGame('online',[{...cfg[0],local:true},remotePl(gp,false)]);G.me=0;show('game');stat('');startMatch()}
+ newGame('online',[{...cfg[0],local:true},remotePl(gp,false)]);G.me=0;wake();show('game');stat('');startMatch()}
 function hostRead(g){const gp=g.presence||{};if(!G)return;const rp=remotePl(gp,false);if(G.phase==='over'||G.rd===1&&G.phase==='between'){G.pl[1].name=rp.name;G.pl[1].av=rp.av}
  const fl=gp.fl;if(fl&&typeof fl.n==='number'&&fl.n>net.lastFl){net.lastFl=fl.n;if(G.phase==='aim'&&G.turn===1)doFlick(1,num(fl.t,-.45,.45),num(fl.jx,-MAXJ,MAXJ),num(fl.jy,-MAXJ,MAXJ))}
  if(typeof gp.rm==='number'&&gp.rm>net.lastRm){net.lastRm=gp.rm;if(G.phase==='over')startMatch()}
@@ -602,13 +612,13 @@ function netTick(dt){net&&(net.acc+=dt);if(!net||!net.started||!G)return;if((G.d
  const st={m:G.mid,ph:G.phase,t:G.turn,sc:G.sc,rd:G.rd,g:net.opp,w:G.winner,b:G.msg||null,h:G.hx||null,
   p:G.pens.map(p=>[Math.round(p.x),Math.round(p.y),Math.round(p.a*1000),p.alive?1:0]),a:G.aim&&G.phase==='aim'?[+G.aim.t.toFixed(3),Math.round(G.aim.jx),Math.round(G.aim.jy)]:null};
  net.nr.presence({st}).catch(()=>{})}}
-function guestRead(h,P){const st=h.presence.st;if(!st||typeof st!=='object'||!Array.isArray(st.p)){stat('Connected. Waiting for the host to start…');return}
+function guestRead(h,P){const st=h.presence.st;if(G)G.stAt=performance.now();if(!st||typeof st!=='object'||!Array.isArray(st.p)){stat('Connected. Waiting for the host to start…');return}
  const spec=st.g!==net.me;
  if(!G||G.mid!==st.m){let other=spec?P.find(p=>p.peer===st.g):null;
-  newGame('online',[remotePl(h.presence,false),spec?remotePl(other&&other.presence||{},false):{...cfg[0],local:true}]);G.mid=st.m;G.me=spec?-1:1;placePens();net.started=true;G.lastRd=-1;show('game');stat('')}
+  newGame('online',[remotePl(h.presence,false),spec?remotePl(other&&other.presence||{},false):{...cfg[0],local:true}]);G.mid=st.m;G.me=spec?-1:1;wake();placePens();net.started=true;G.lastRd=-1;show('game');stat('')}
  G.pl[0].name=remotePl(h.presence).name;G.pl[0].av=safeAv(h.presence.av);
  if(st.rd!==G.lastRd){G.lastRd=st.rd;placePens();resetTrailTips()}
- G.phase=['aim','moving','between','over','idle'].includes(st.ph)?st.ph:'idle';G.turn=st.t?1:0;G.sc=[num(st.sc&&st.sc[0],0,3),num(st.sc&&st.sc[1],0,3)];G.rd=num(st.rd,1,99,1);
+ G.phase=['aim','moving','between','over','idle'].includes(st.ph)?st.ph:'idle';G.stAt=performance.now();G.turn=st.t?1:0;G.sc=[num(st.sc&&st.sc[0],0,3),num(st.sc&&st.sc[1],0,3)];G.rd=num(st.rd,1,99,1);
  st.p.slice(0,2).forEach((q,i)=>{const p=G.pens[i];if(!Array.isArray(q))return;p.tx=num(q[0],-2000,3000);p.ty=num(q[1],-2000,3000);p.ta=num(q[2],-1e7,1e7)/1000;
   const al=!!q[3];if(p.alive&&!al){p.alive=false;onEvent({t:'fall',i,x:p.tx,y:p.ty})}else if(!p.alive&&al){p.alive=true;p.fall=0;p.x=p.tx;p.y=p.ty;p.a=p.ta}});
  if(Array.isArray(st.b)&&st.b[0]!==G.lastB){G.lastB=st.b[0];banner(String(st.b[1]).slice(0,60),1300)}
