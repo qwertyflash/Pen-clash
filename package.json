@@ -1,0 +1,23 @@
+{
+  "name": "pen-clash",
+  "version": "2.0.0",
+  "private": true,
+  "description": "Flick-to-fight pen battles on a graph-paper arena. Play vs a bot, pass & play, or online.",
+  "type": "module",
+  "engines": { "node": ">=20.19" },
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "start": "node server/index.js",
+    "test": "node --test --test-force-exit --test-timeout=20000 \"tests/*.test.js\"",
+    "test:e2e": "node scripts/e2e.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "mqtt": "^5.16.1",
+    "vite": "^7.1.12"
+  }
+}
