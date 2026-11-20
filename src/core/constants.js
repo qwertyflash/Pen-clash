@@ -10,7 +10,7 @@ export const COL = ['#ff4d8d', '#ffe23d', '#22e1c6', '#ff7a1a'];
 
 // Bump this whenever the online message format changes. Players on different
 // versions are told to refresh instead of silently getting stuck.
-export const PROTOCOL = 5;
+export const PROTOCOL = 6;
 
 export const PENS = [
   { name: 'Ballpoint Blue', tag: 'All-rounder', len: 190, r: 9, mass: 1, fric: 1, body: '#2f52e0', body2: '#14299a', cap: '#13206b', acc: '#dfe6ff', tip: '#c9ced8', ink: '#2747d8', kind: 'ball' },
