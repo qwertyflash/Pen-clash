@@ -1,6 +1,8 @@
-// Rigid-body pens: capsules that slide with friction, spin, and bounce off each other.
-import { CX, CY, R, MAXJ, ANG, E } from './constants.js';
+// Rigid-body pens: capsules that slide with friction, spin, and bounce off each other
+// and off the arena's fixed obstacles.
+import { MAXJ, ANG, E } from './constants.js';
 import { clamp } from './util.js';
+import { inside } from './arenas.js';
 
 export function mkPen(i, d, x, y, a) {
   return { i, d, x, y, a, vx: 0, vy: 0, w: 0, L: d.len, r: d.r, m: d.mass, I: (d.mass * d.len * d.len) / 12, alive: true, fall: 0, tx: x, ty: y, ta: a };
@@ -37,17 +39,42 @@ function collide(a, b, ev) {
   if (ev) ev.push({ t: 'hit', x: px, y: py, j });
 }
 
-export function step(P, dt, ev) {
+/** Bounce pen p off a fixed round obstacle o (infinite mass). */
+function hitObstacle(p, o, ev) {
+  const [x1, y1, x2, y2] = ends(p), dx = x2 - x1, dy = y2 - y1;
+  const t = clamp(((o.x - x1) * dx + (o.y - y1) * dy) / (dx * dx + dy * dy || 1), 0, 1);
+  const cx = x1 + dx * t, cy = y1 + dy * t;
+  let nx = cx - o.x, ny = cy - o.y;
+  const d = Math.hypot(nx, ny), rs = p.r + o.r;
+  if (d >= rs) return;
+  if (d < 1e-6) { nx = 1; ny = 0; } else { nx /= d; ny /= d; }
+  p.x += nx * (rs - d); p.y += ny * (rs - d);
+  const px = o.x + nx * o.r, py = o.y + ny * o.r, rx = px - p.x, ry = py - p.y;
+  const vn = (p.vx - p.w * ry) * nx + (p.vy + p.w * rx) * ny;
+  if (vn >= 0) return;
+  const rn = rx * ny - ry * nx, j = (-(1 + E) * vn) / (1 / p.m + (rn * rn) / p.I);
+  p.vx += (j * nx) / p.m; p.vy += (j * ny) / p.m; p.w += ((ANG * rn * j) / p.I) * 2;
+  if (ev) ev.push({ t: 'hit', x: px, y: py, j });
+}
+
+/** Advance the world by dt seconds on arena ar. Pushes 'hit' and 'fall' events into ev. */
+export function step(P, dt, ev, ar) {
+  const af = ar.fric;
   for (const p of P) {
+    if (!p.alive && p.fall >= 1) continue;
     p.x += p.vx * dt; p.y += p.vy * dt; p.a += p.w * dt;
-    const sp = Math.hypot(p.vx, p.vy);
-    if (sp > 0) { const ns = Math.max(0, sp - (sp * 1.4 + 240 * p.d.fric) * dt); p.vx *= ns / sp; p.vy *= ns / sp; }
-    p.w *= Math.exp(-2.6 * dt);
-    const wd = 1.4 * dt * p.d.fric;
+    const sp = Math.hypot(p.vx, p.vy), fr = p.d.fric * af;
+    if (sp > 0) { const ns = Math.max(0, sp - (sp * 1.4 * Math.sqrt(af) + 240 * fr) * dt); p.vx *= ns / sp; p.vy *= ns / sp; }
+    p.w *= Math.exp(-2.6 * Math.sqrt(af) * dt);
+    const wd = 1.4 * dt * fr;
     p.w = Math.abs(p.w) < wd ? 0 : p.w - Math.sign(p.w) * wd;
-    if (p.alive && Math.hypot(p.x - CX, p.y - CY) > R) { p.alive = false; if (ev) ev.push({ t: 'fall', i: p.i, x: p.x, y: p.y }); }
+    if (p.alive && !inside(ar, p.x, p.y)) { p.alive = false; if (ev) ev.push({ t: 'fall', i: p.i, x: p.x, y: p.y }); }
   }
-  if (P[0].alive && P[1].alive) collide(P[0], P[1], ev);
+  for (let a = 0; a < P.length; a++) {
+    if (!P[a].alive) continue;
+    for (let b = a + 1; b < P.length; b++) if (P[b].alive) collide(P[a], P[b], ev);
+    for (const o of ar.obstacles) hitObstacle(P[a], o, ev);
+  }
 }
 
 export const moving = (P) => P.some((p) => p.alive && (Math.hypot(p.vx, p.vy) > 4 || Math.abs(p.w) > 0.06));

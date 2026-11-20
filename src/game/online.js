@@ -1,24 +1,25 @@
-// Online play.
+// Online play for 2-4 players.
 //
 // The host runs the real match. It publishes a small state object `st` whenever
 // something changes (and at least once a second), including the last shot: where the
 // pens started and the flick that was applied. Guests replay that shot with the same
-// physics code, so motion is smooth on every screen without streaming positions, and
-// then snap to the host's final positions when the shot ends.
+// physics, so motion is smooth on every screen without streaming positions, and then
+// snap to the host's final positions when the shot ends.
 //
 // A guest sends its own flick as `fl` and keeps re-sending it until the host
-// acknowledges it (`st.fa`). It also predicts its own shot immediately.
-import { PROTOCOL, MAXJ } from '../core/constants.js';
-import { $, clamp, num } from '../core/util.js';
+// acknowledges it (`st.fa[guestId]`). It also predicts its own shot immediately.
+import { PROTOCOL, MAXJ, MAX_PLAYERS, WIN_ROUNDS } from '../core/constants.js';
+import { $, clamp, esc, num } from '../core/util.js';
+import { arenaById } from '../core/arenas.js';
 import { flickPen } from '../core/physics.js';
 import { sfx } from '../ui/audio.js';
-import { safeAv, shrink } from '../ui/avatars.js';
+import { PRE, safeAv, shrink } from '../ui/avatars.js';
 import { show, banner } from '../ui/screens.js';
 import { joinNetRoom } from '../net/index.js';
 import { S, isAuth } from './state.js';
-import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock } from './match.js';
+import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock, removePlayer, activeIdx } from './match.js';
 
-const VERSION_MSG = 'Your friend is on a different version of Pen Clash. Both of you: refresh the page (Ctrl+Shift+R or pull down to reload), then try again.';
+const VERSION_MSG = 'Someone is on a different version of Pen Clash. Everyone: refresh the page (Ctrl+Shift+R or pull down to reload), then try again.';
 const HOST_KEEPALIVE = 1, HOST_MIN_GAP = 0.1, FLICK_RESEND_MS = 800, RESYNC_MS = 2500;
 
 export const stat = (t) => { $('#netStatus').textContent = t; };
@@ -47,6 +48,9 @@ export function leaveNet() {
     clearTimeout(net.to);
     S.net = null;
   }
+  $('#startBtn').hidden = true;
+  $('#lobbyList').innerHTML = '';
+  $('#lobbyArena').textContent = '';
 }
 
 export function lobbyReset() {
@@ -62,22 +66,23 @@ export async function joinRoom(code, role) {
     const nr = await joinNetRoom(code, role, (t) => { if (tok === joinToken) stat(t); });
     if (tok !== joinToken) { nr.leave(); return; }
     S.net = {
-      nr, role, code, flN: Date.now(), rmN: Date.now(), lastFl: 0, lastRm: 0, opp: null, hostId: null,
-      started: false, acc: 0, keep: 0, me: null, pf: null, pfAt: 0, hostAt: 0, lastSt: null, rsAt: 0, aimAt: 0,
+      nr, role, code, flN: Date.now(), rmN: Date.now(), lastFl: {}, lastRm: {}, ids: [], hostId: null,
+      started: false, acc: 0, keep: 0, me: null, pf: null, pfAt: 0, hostAt: 0, lastSt: null, rsAt: 0, aimAt: 0, lobbySig: '',
     };
     const cfg = S.cfg[0];
     let av = await shrink(cfg.av, 44, 0.6);
-    const base = { role, name: cfg.name, pen: cfg.pen, v: PROTOCOL };
+    const base = { role, name: cfg.name, pen: cfg.pen, v: PROTOCOL, ...(role === 'host' ? { ar: S.arena } : {}) };
     try { await nr.presence({ ...base, av }); }
     catch { av = await shrink(cfg.av, 28, 0.5); await nr.presence({ ...base, av }).catch(() => nr.presence(base)); }
     if (tok !== joinToken) return;
     $('#lobbyStart').hidden = true; $('#lobbyWait').hidden = false; $('#codeBig').textContent = code;
     const via = nr.transport === 'server' ? 'the game server' : 'the relay';
-    stat(role === 'host' ? 'Connected to ' + via + '. Waiting for your opponent to join with this code…' : 'Connected to ' + via + '. Looking for the host of ' + code + '…');
+    stat(role === 'host' ? 'Connected to ' + via + '. Waiting for players to join with this code…' : 'Connected to ' + via + '. Looking for the host of ' + code + '…');
     if (role === 'guest') S.net.to = setTimeout(() => {
-      if (S.net && !S.net.started) stat('No host found for ' + code + '. Make sure you both opened the same link, and the host’s screen is still showing this code.');
+      if (S.net && !S.net.hostId) stat('No host found for ' + code + '. Make sure you all opened the same link, and the host’s screen is still showing this code.');
     }, 12000);
     S.net.un = nr.onPeers(onPeers);
+    renderLobby([]);
   } catch (e) {
     if (tok !== joinToken) return;
     leaveNet();
@@ -85,44 +90,71 @@ export async function joinRoom(code, role) {
   }
 }
 
-function oppLeft(msg) {
+/** Back to the lobby after the match ended for us. */
+function backToLobby(msg) {
   const net = S.net;
   if (!net) return;
-  net.started = false; net.opp = null; net.hostId = null;
+  net.started = false; net.ids = []; net.hostId = null; net.lobbySig = '';
   clearTimers();
   S.G = null;
   $('#result').hidden = true;
   show('online');
   $('#lobbyStart').hidden = true; $('#lobbyWait').hidden = false;
   stat(msg);
+  renderLobby(lastPeers);
+  if (net.role === 'host' && /Waiting|left/.test(msg)) stat(msg);
 }
 
+/** Players waiting in the room, in the order they arrived. Host first. */
+function lobbyPlayers(P) {
+  const host = P.find((p) => p.presence && p.presence.role === 'host');
+  const guests = P.filter((p) => p.presence && p.presence.role === 'guest');
+  return host ? [host, ...guests] : guests;
+}
+
+function renderLobby(P) {
+  const net = S.net;
+  if (!net || net.started) return;
+  const list = lobbyPlayers(P);
+  const host = list[0] && list[0].presence.role === 'host' ? list[0] : null;
+  const sig = JSON.stringify(list.map((p) => [p.peer, p.presence.name, p.presence.v, p.presence.ar]));
+  if (sig === net.lobbySig) return;
+  net.lobbySig = sig;
+  $('#lobbyList').innerHTML = list.map((p, k) => {
+    const pr = p.presence, old = pr.v !== PROTOCOL, seat = k < MAX_PLAYERS ? '' : ' · will watch';
+    return `<li><img src="${safeAv(pr.av, PRE[k % PRE.length])}" alt=""><span>${esc(String(pr.name || 'Player').slice(0, 14))}${p.sameTab ? ' (you)' : ''}${pr.role === 'host' ? ' · host' : ''}${old ? ' · needs refresh' : seat}</span></li>`;
+  }).join('');
+  if (host) $('#lobbyArena').textContent = 'Arena: ' + arenaById(host.presence.ar).name;
+  if (net.role === 'host') {
+    const ready = list.filter((p) => !p.sameTab && p.presence.v === PROTOCOL).length;
+    $('#startBtn').hidden = false;
+    $('#startBtn').disabled = ready < 1;
+    $('#startBtn').textContent = ready < 1 ? 'Waiting for players…' : `Start match (${Math.min(ready + 1, MAX_PLAYERS)} players)`;
+    if (list.some((p) => p.presence.v !== PROTOCOL)) stat(VERSION_MSG);
+  } else if (host) {
+    stat(host.presence.v !== PROTOCOL ? VERSION_MSG : 'Connected. Waiting for the host to start the match…');
+  }
+}
+
+let lastPeers = [];
 function onPeers(ch) {
   const net = S.net;
   if (!net) return;
   const P = ch.peers;
+  lastPeers = P;
   const me = P.find((p) => p.sameTab);
   if (me) net.me = me.peer;
   if (net.role === 'host') {
-    const g = net.opp && P.find((p) => p.peer === net.opp);
-    if (!g) {
-      if (net.opp) oppLeft('Your opponent left. Waiting for someone to join with the code…');
-      const cand = P.filter((p) => !p.sameTab && p.presence && p.presence.role === 'guest');
-      const ok = cand.find((p) => p.presence.v === PROTOCOL);
-      if (ok) hostStart(ok); else if (cand.length) stat(VERSION_MSG);
-      return;
-    }
-    hostRead(g);
+    if (!net.started) { renderLobby(P); return; }
+    hostPeers(P);
   } else {
     // Keep following the same host even while its presence is being re-sent.
     const h = (net.hostId && P.find((p) => p.peer === net.hostId)) || P.find((p) => !p.sameTab && p.presence && p.presence.role === 'host');
-    if (!h) { if (net.started) oppLeft('The host left the match.'); return; }
+    if (!h) { if (net.started) backToLobby('The host left the match.'); else renderLobby(P); return; }
     clearTimeout(net.to);
-    if (h.presence.role && h.presence.v !== PROTOCOL) {
-      if (net.started) oppLeft(VERSION_MSG); else stat(VERSION_MSG);
-      return;
-    }
     net.hostId = h.peer;
+    if (h.presence.role && h.presence.v !== PROTOCOL) { if (net.started) backToLobby(VERSION_MSG); else renderLobby(P); return; }
+    if (!net.started) renderLobby(P);
     guestRead(h, P);
   }
 }
@@ -130,42 +162,66 @@ function onPeers(ch) {
 const remotePl = (pr, local) => ({ name: String(pr.name || 'Player').slice(0, 14), pen: clamp(pr.pen | 0, 0, 5), av: safeAv(pr.av), local });
 
 /* ---------- host ---------- */
-function hostStart(g) {
-  const net = S.net, gp = g.presence;
-  net.opp = g.peer; net.started = true;
-  net.lastFl = num(gp.fl && gp.fl.n, 0, 1e15);
-  net.lastRm = num(gp.rm, 0, 1e15);
-  newGame('online', [{ ...S.cfg[0], local: true }, remotePl(gp, false)]);
+export function hostStartMatch() {
+  const net = S.net;
+  if (!net || net.role !== 'host' || net.started) return;
+  const guests = lobbyPlayers(lastPeers).filter((p) => !p.sameTab && p.presence.role === 'guest' && p.presence.v === PROTOCOL).slice(0, MAX_PLAYERS - 1);
+  if (!guests.length) return;
+  net.ids = [net.me, ...guests.map((g) => g.peer)];
+  net.started = true;
+  for (const g of guests) { net.lastFl[g.peer] = num(g.presence.fl && g.presence.fl.n, 0, 1e15); net.lastRm[g.peer] = num(g.presence.rm, 0, 1e15); }
+  newGame('online', [{ ...S.cfg[0], local: true }, ...guests.map((g) => remotePl(g.presence, false))], S.arena);
   S.G.me = 0;
+  $('#startBtn').hidden = true;
   wake(); show('game'); stat('');
   startMatch();
 }
 
-function hostRead(g) {
-  const net = S.net, G = S.G, gp = g.presence || {};
+function hostPeers(P) {
+  const net = S.net, G = S.G;
   if (!G) return;
-  const rp = remotePl(gp, false);
-  if (G.phase === 'over' || (G.rd === 1 && G.phase === 'between')) { G.pl[1].name = rp.name; G.pl[1].av = rp.av; }
-  const fl = gp.fl;
-  if (fl && typeof fl.n === 'number' && fl.n > net.lastFl) {
-    // Acknowledge every new flick (st.fa), even one that arrives too late to use.
-    net.lastFl = fl.n; G.dirty = true;
-    if (G.phase === 'aim' && G.turn === 1)
-      doFlick(1, num(fl.t, -0.45, 0.45), num(fl.jx, -MAXJ, MAXJ), num(fl.jy, -MAXJ, MAXJ), fl.n);
+  for (let k = 1; k < net.ids.length; k++) {
+    if (G.pl[k].gone) continue;
+    const g = P.find((p) => p.peer === net.ids[k]);
+    if (!g) {
+      banner(G.pl[k].name + ' left', 1500);
+      removePlayer(k);
+      if (activeIdx().length < 2) { backToLobby('Everyone else left. Waiting for players to join with the code…'); return; }
+      continue;
+    }
+    hostRead(k, g);
   }
-  if (typeof gp.rm === 'number' && gp.rm > net.lastRm) { net.lastRm = gp.rm; if (G.phase === 'over') startMatch(); }
-  const a = gp.aim;
-  G.raim = Array.isArray(a) && G.phase === 'aim' && G.turn === 1 ? { i: 1, t: num(a[0], -0.45, 0.45), jx: num(a[1], -MAXJ, MAXJ), jy: num(a[2], -MAXJ, MAXJ) } : null;
+}
+
+function hostRead(k, g) {
+  const net = S.net, G = S.G, gp = g.presence || {}, id = g.peer;
+  const rp = remotePl(gp, false);
+  if (G.phase === 'over' || (G.rd === 1 && G.phase === 'between')) { G.pl[k].name = rp.name; G.pl[k].av = rp.av; }
+  const fl = gp.fl;
+  if (fl && typeof fl.n === 'number' && fl.n > (net.lastFl[id] || 0)) {
+    // Acknowledge every new flick (st.fa), even one that arrives too late to use.
+    net.lastFl[id] = fl.n; G.dirty = true;
+    if (G.phase === 'aim' && G.turn === k)
+      doFlick(k, num(fl.t, -0.45, 0.45), num(fl.jx, -MAXJ, MAXJ), num(fl.jy, -MAXJ, MAXJ), fl.n);
+  }
+  if (typeof gp.rm === 'number' && gp.rm > (net.lastRm[id] || 0)) { net.lastRm[id] = gp.rm; if (G.phase === 'over') startMatch(); }
+  if (G.turn === k) {
+    const a = gp.aim;
+    const next = Array.isArray(a) && G.phase === 'aim' ? { i: k, t: num(a[0], -0.45, 0.45), jx: num(a[1], -MAXJ, MAXJ), jy: num(a[2], -MAXJ, MAXJ) } : null;
+    if (JSON.stringify(next) !== JSON.stringify(G.raim)) { G.raim = next; G.dirty = true; }
+  }
 }
 
 const q3 = (v) => Math.round(v * 1000) / 1000;
 function hostState() {
   const G = S.G, net = S.net;
+  const aim = G.phase === 'aim' ? G.aim || G.raim : null;
   return {
-    m: G.mid, ph: G.phase, t: G.turn, sc: G.sc, rd: G.rd, g: net.opp, w: G.winner, b: G.msg || null, fa: net.lastFl,
+    m: G.mid, ar: G.arena.id, ids: net.ids, pl: G.pl.map((p) => [p.name, p.pen]), gone: G.pl.map((p) => (p.gone ? 1 : 0)),
+    ph: G.phase, t: G.turn, sc: G.sc, rd: G.rd, w: G.winner, b: G.msg || null, fa: net.lastFl,
     p: G.pens.map((p) => [q3(p.x), q3(p.y), q3(p.a), p.alive ? 1 : 0]),
     sh: G.phase === 'moving' ? G.shot : null,
-    a: G.aim && G.phase === 'aim' ? [+G.aim.t.toFixed(3), Math.round(G.aim.jx), Math.round(G.aim.jy)] : null,
+    a: aim ? [aim.i, +aim.t.toFixed(3), Math.round(aim.jx), Math.round(aim.jy)] : null,
   };
 }
 
@@ -206,7 +262,7 @@ function snapToAuth() {
 function startReplay(sh) {
   const G = S.G;
   if (!Array.isArray(sh.s)) return;
-  sh.s.slice(0, 2).forEach((q, i) => {
+  sh.s.slice(0, G.pens.length).forEach((q, i) => {
     const p = G.pens[i];
     if (!Array.isArray(q)) return;
     const x = num(q[0], -2000, 3000), y = num(q[1], -2000, 3000);
@@ -215,7 +271,8 @@ function startReplay(sh) {
     const al = !!q[3];
     if (!al && p.alive) { p.alive = false; p.fall = 1; } else if (al && !p.alive) { p.alive = true; p.fall = 0; }
   });
-  flickPen(G.pens[sh.i ? 1 : 0], num(sh.t, -0.45, 0.45), num(sh.jx, -MAXJ, MAXJ), num(sh.jy, -MAXJ, MAXJ));
+  const i = clamp(sh.i | 0, 0, G.pens.length - 1);
+  flickPen(G.pens[i], num(sh.t, -0.45, 0.45), num(sh.jx, -MAXJ, MAXJ), num(sh.jy, -MAXJ, MAXJ));
   G.sim = true; G.simEnd = 0; resetSimClock();
   sfx.flick();
 }
@@ -234,7 +291,7 @@ export function guestFlick(a) {
   sfx.flick();
 }
 
-/** Throttled live aim preview for the host's screen. */
+/** Throttled live aim preview for everyone else's screen. */
 export function guestAim(aim) {
   const net = S.net, now = performance.now();
   if (!net || now - net.aimAt < 90) return;
@@ -245,45 +302,61 @@ export function guestAim(aim) {
 function guestRead(h, P) {
   const net = S.net;
   const st = h.presence.st;
-  if (!st || typeof st !== 'object' || !Array.isArray(st.p)) { if (!S.G) stat('Connected. Waiting for the host to start…'); return; }
+  if (!st || typeof st !== 'object' || !Array.isArray(st.p) || !Array.isArray(st.ids)) return;
+  const n = st.ids.length;
+  if (n < 2 || n > MAX_PLAYERS || st.p.length !== n || !Array.isArray(st.pl) || st.pl.length !== n) return;
   if (st !== net.lastSt) { net.lastSt = st; net.hostAt = performance.now(); }
-  const spec = st.g !== net.me;
-  if (net.pf && typeof st.fa === 'number' && st.fa >= net.pf.n) net.pf = null;
+  const seat = st.ids.indexOf(net.me);
+  const myAck = st.fa && typeof st.fa === 'object' ? st.fa[net.me] : undefined;
+  if (net.pf && typeof myAck === 'number' && myAck >= net.pf.n) net.pf = null;
 
+  const avOf = (k) => {
+    const pr = k === 0 ? h.presence : (P.find((p) => p.peer === st.ids[k]) || {}).presence;
+    return safeAv(pr && pr.av, PRE[k % PRE.length]);
+  };
   let G = S.G;
   if (!G || G.mid !== st.m) {
-    const other = spec ? P.find((p) => p.peer === st.g) : null;
-    newGame('online', [remotePl(h.presence, false), spec ? remotePl((other && other.presence) || {}, false) : { ...S.cfg[0], local: true }]);
-    G = S.G; G.mid = st.m; G.me = spec ? -1 : 1; G.lastRd = -1;
+    const pl = st.pl.map((q, k) => ({
+      name: String((Array.isArray(q) && q[0]) || 'Player').slice(0, 14), pen: clamp((Array.isArray(q) && q[1]) | 0, 0, 5), av: avOf(k), local: k === seat,
+    }));
+    if (seat > 0) Object.assign(pl[seat], { ...S.cfg[0], local: true });
+    newGame('online', pl, st.ar);
+    G = S.G; G.mid = st.m; G.me = seat > 0 ? seat : -1; G.lastRd = -1;
     wake(); placePens(); net.started = true; show('game'); stat('');
   }
-  G.pl[0].name = remotePl(h.presence).name; G.pl[0].av = safeAv(h.presence.av);
+  st.pl.forEach((q, k) => {
+    if (k === G.me || !Array.isArray(q)) return;
+    G.pl[k].name = String(q[0] || 'Player').slice(0, 14); G.pl[k].av = avOf(k);
+  });
+  if (Array.isArray(st.gone)) st.gone.forEach((g, k) => { if (G.pl[k]) G.pl[k].gone = !!g; });
   if (st.rd !== G.lastRd) { G.lastRd = st.rd; placePens(); G.sim = false; G.pred = 0; }
 
   const ph = ['aim', 'moving', 'between', 'over', 'idle'].includes(st.ph) ? st.ph : 'idle';
-  G.turn = st.t ? 1 : 0;
-  G.sc = [num(st.sc && st.sc[0], 0, 3), num(st.sc && st.sc[1], 0, 3)];
+  G.turn = clamp(st.t | 0, 0, n - 1);
+  G.sc = G.pl.map((_, k) => num(Array.isArray(st.sc) ? st.sc[k] : 0, 0, WIN_ROUNDS));
   G.rd = num(st.rd, 1, 99, 1);
-  G.auth = st.p.slice(0, 2).map((q) => (Array.isArray(q) ? { x: num(q[0], -2000, 3000), y: num(q[1], -2000, 3000), a: num(q[2], -1e7, 1e7), alive: !!q[3] } : null));
+  G.auth = st.p.map((q) => (Array.isArray(q) ? { x: num(q[0], -2000, 3000), y: num(q[1], -2000, 3000), a: num(q[2], -1e7, 1e7), alive: !!q[3] } : null));
 
   // A new shot: replay it, unless it is the one we already predicted.
   const sh = st.sh;
   if (sh && typeof sh === 'object' && typeof sh.n === 'number' && sh.n !== G.lastShot && ph === 'moving') {
     G.lastShot = sh.n;
-    if (!(G.pred && sh.fl === G.pred)) startReplay(sh);
+    if (!(G.pred && sh.fl === G.pred && sh.i === G.me)) startReplay(sh);
     G.pred = 0;
   }
   // Host acknowledged our flick but did not use it: drop the prediction.
   if (G.pred && !net.pf && ph !== 'moving') { G.pred = 0; G.sim = false; }
 
   let phase = ph;
-  if (phase === 'aim' && G.turn === 1 && !spec && net.pf) phase = 'moving'; // our shot is on its way
+  if (phase === 'aim' && G.turn === G.me && net.pf) phase = 'moving'; // our shot is on its way
   G.phase = phase;
   if (G.sim && ph !== 'moving' && !G.simEnd) G.simEnd = performance.now() + 1500;
 
   if (Array.isArray(st.b) && st.b[0] !== G.lastB) { G.lastB = st.b[0]; banner(String(st.b[1]).slice(0, 60), 1300); }
-  G.raim = Array.isArray(st.a) && G.phase === 'aim' && G.turn === 0 ? { i: 0, t: num(st.a[0], -0.45, 0.45), jx: num(st.a[1], -MAXJ, MAXJ), jy: num(st.a[2], -MAXJ, MAXJ) } : null;
-  if (G.phase === 'over' && $('#result').hidden) { G.winner = st.w ? 1 : 0; showResult(); }
+  const a = st.a;
+  G.raim = Array.isArray(a) && G.phase === 'aim' && (a[0] | 0) !== G.me && (a[0] | 0) === G.turn
+    ? { i: a[0] | 0, t: num(a[1], -0.45, 0.45), jx: num(a[2], -MAXJ, MAXJ), jy: num(a[3], -MAXJ, MAXJ) } : null;
+  if (G.phase === 'over' && $('#result').hidden) { G.winner = clamp(st.w | 0, 0, n - 1); showResult(); }
   else if (G.phase !== 'over') $('#result').hidden = true;
 }
 
@@ -295,7 +368,7 @@ export function guestTick(dt) {
       const q = G.auth[i];
       if (!q) return;
       p.tx = q.x; p.ty = q.y; p.ta = q.a;
-      if (p.alive && !q.alive) { p.alive = false; onEvent({ t: 'fall', i, x: p.x, y: p.y }); }
+      if (p.alive && !q.alive) { p.alive = false; if (!G.pl[i].gone) onEvent({ t: 'fall', i, x: p.x, y: p.y }); else p.fall = 1; }
       else if (!p.alive && q.alive) { p.alive = true; p.fall = 0; p.x = q.x; p.y = q.y; p.a = q.a; p.tip = null; }
     });
   }
@@ -315,33 +388,37 @@ export function requestRematch() {
 }
 
 /* ---------- connection status ---------- */
+const otherPeers = () => {
+  const net = S.net;
+  return net.role === 'host' ? net.ids.slice(1).filter((id, k) => S.G && !S.G.pl[k + 1].gone) : net.hostId ? [net.hostId] : [];
+};
+
 /** { text, bad } for the little label under the hint, or null offline. */
 export function connLabel() {
   const net = S.net, G = S.G;
   if (!net || !G || G.mode !== 'online') return null;
-  const peer = net.role === 'host' ? net.opp : net.hostId;
-  if (!peer) return null;
-  const r = net.nr.route(peer), seen = net.nr.lastSeen(peer);
-  const lost = seen > 5000 || (!isAuth() && performance.now() - net.hostAt > 4000);
-  const path = r.path === 'direct' ? 'Direct link' : r.path === 'server' ? 'Game server' : 'Relay';
-  return { text: lost ? 'Connection lost, reconnecting…' : path + (r.rtt != null ? ' · ' + r.rtt + ' ms' : ''), bad: lost };
+  const peers = otherPeers();
+  if (!peers.length) return null;
+  const routes = peers.map((id) => net.nr.route(id));
+  const lost = peers.some((id) => net.nr.lastSeen(id) > 5000) || (!isAuth() && performance.now() - net.hostAt > 4000);
+  const direct = routes.filter((r) => r.path === 'direct').length;
+  const path = direct === routes.length ? 'Direct link' : direct ? `Direct link ×${direct}, relay ×${routes.length - direct}` : routes[0].path === 'server' ? 'Game server' : 'Relay';
+  const rtts = routes.map((r) => r.rtt).filter((x) => x != null);
+  return { text: lost ? 'Connection lost, reconnecting…' : path + (rtts.length ? ' · ' + Math.max(...rtts) + ' ms' : ''), bad: lost };
 }
 
 export function debugText() {
   const net = S.net, G = S.G;
   const lines = ['Pen Clash protocol v' + PROTOCOL];
   if (net) {
-    const peer = net.role === 'host' ? net.opp : net.hostId;
-    const r = peer ? net.nr.route(peer) : {};
-    lines.push(
-      'role: ' + net.role + '  code: ' + net.code + '  transport: ' + net.nr.transport + (r.host ? ' (' + r.host + ')' : ''),
-      'me: ' + net.me + '  peer: ' + (peer || '-') + '  path: ' + (r.path || '-') + '  rtt: ' + (r.rtt ?? '-') + ' ms',
-      'peer last heard: ' + (peer ? Math.round(net.nr.lastSeen(peer)) + ' ms ago' : '-'),
-    );
-    if (net.role === 'host') lines.push('last guest flick: ' + net.lastFl);
-    else lines.push('host state age: ' + (net.hostAt ? Math.round(performance.now() - net.hostAt) : '-') + ' ms  pending flick: ' + (net.pf ? net.pf.n : 'none'));
+    lines.push('role: ' + net.role + '  code: ' + net.code + '  transport: ' + net.nr.transport + '  me: ' + net.me);
+    for (const id of otherPeers()) {
+      const r = net.nr.route(id);
+      lines.push(`peer ${id}: ${r.path}${r.host && r.path !== 'direct' ? ' (' + r.host + ')' : ''}  rtt ${r.rtt ?? '-'} ms  heard ${Math.round(net.nr.lastSeen(id))} ms ago` + (net.role === 'host' ? '  last flick ' + (net.lastFl[id] || 0) : ''));
+    }
+    if (net.role !== 'host') lines.push('host state age: ' + (net.hostAt ? Math.round(performance.now() - net.hostAt) : '-') + ' ms  pending flick: ' + (net.pf ? net.pf.n : 'none'));
   } else lines.push('offline');
-  if (G) lines.push('phase: ' + G.phase + '  turn: ' + G.turn + '  round: ' + G.rd + '  score: ' + G.sc.join('-') + '  shot: ' + (G.shot ? G.shot.n : G.lastShot) + '  replaying: ' + G.sim);
+  if (G) lines.push('arena: ' + G.arena.id + '  phase: ' + G.phase + '  turn: ' + G.turn + '  round: ' + G.rd + '  score: ' + G.sc.join('-') + '  shot: ' + (G.shot ? G.shot.n : G.lastShot) + '  replaying: ' + G.sim);
   if (S.errors.length) lines.push('errors:', ...S.errors.slice(-5));
   return lines.join('\n');
 }

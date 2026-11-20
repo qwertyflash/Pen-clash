@@ -19,17 +19,17 @@
   </header>
   <div class="heroBox"><canvas id="hero" aria-label="Two pens clashing on a graph-paper arena"></canvas></div>
   <div class="modes">
-   <button class="mode m1" data-mode="bot"><b>Vs Bot</b><span>Offline. Easy, Pro or Insane AI.</span></button>
-   <button class="mode m2" data-mode="local"><b>Pass &amp; Play</b><span>Offline. Two players, one device.</span></button>
-   <button class="mode m3" data-mode="online"><b>Online</b><span>Live match with a 4-letter code.</span></button>
+   <button class="mode m1" data-mode="bot"><b>Vs Bot</b><span>Offline. Take on 1 to 3 bots.</span></button>
+   <button class="mode m2" data-mode="local"><b>Pass &amp; Play</b><span>Offline. 2 to 4 players, one device.</span></button>
+   <button class="mode m3" data-mode="online"><b>Online</b><span>Up to 4 players with a 4-letter code.</span></button>
   </div>
   <details class="how">
    <summary>How to play</summary>
    <ol>
     <li>On your turn, press anywhere on the arena, drag back like a slingshot and let go. Your pen shoots the opposite way.</li>
     <li>The spot on your pen nearest to where you pressed is where you strike it: press near an end to add spin.</li>
-    <li>Knock the other pen past the pink dashed edge to win the round. Fall off yourself and they score.</li>
-    <li>First to 3 rounds wins. Heavy pens hit harder, light pens fly further.</li>
+    <li>Knock other pens past the dashed edge. Fall off and you are out for the round. Last pen standing wins the round.</li>
+    <li>First to 3 rounds wins. 2 to 4 players. Heavy pens hit harder, light pens fly further. Pick an arena: ice is slippery, erasers bounce you back.</li>
    </ol>
   </details>
  </div>
@@ -38,6 +38,7 @@
 <section id="setup" class="screen" hidden>
  <div class="wrap">
   <div class="bar"><button class="btn ghost sm" data-back="menu">Back</button><h2 id="setupTitle">Pick your fighter</h2></div>
+  <div id="settings" class="settings"></div>
   <div id="cards" class="cards"></div>
   <div class="go"><button class="btn big pink" id="goBtn">Start fight</button></div>
  </div>
@@ -56,15 +57,19 @@
     <p style="margin:0;font-weight:800">Match code</p>
     <div id="codeBig" class="code"></div>
     <button id="copyCode" class="btn sm ghost">Copy code</button>
+    <p id="lobbyArena" class="muted" style="margin:14px 0 0;font-weight:700"></p>
+    <ul id="lobbyList" class="plist"></ul>
+    <button id="startBtn" class="btn big pink" style="width:100%" hidden>Start match</button>
    </div>
    <p id="netStatus" class="muted" style="margin:14px 0 0"></p>
   </div>
-  <p class="note">Send your friend the same link. They pick a fighter, tap Online and enter the code. On the same Wi-Fi the two devices connect directly to each other; otherwise moves go through a relay server. Anyone extra who joins the code watches as a spectator.</p>
+  <p class="note">Send your friends the same link. Up to 4 players: they pick a fighter, tap Online and enter the code, then the host taps Start. On the same Wi-Fi the two devices connect directly to each other; otherwise moves go through a relay server. Anyone who joins after the start, or beyond 4 players, watches as a spectator.</p>
  </div>
 </section>
 
 <section id="game" class="screen gscreen" hidden>
- <div class="hud"><div class="chip" id="c0"></div><div id="rdLbl" class="disp">Round 1</div><div class="chip r" id="c1"></div></div>
+ <div id="chips" class="hud"></div>
+ <div class="oddsRow"><span id="rdLbl" class="disp">Round 1</span><div id="odds" class="odds" role="img" aria-label="Win chance"></div></div>
  <div class="stage">
   <canvas id="cv"></canvas>
   <div id="banner" class="banner" aria-live="polite"></div>

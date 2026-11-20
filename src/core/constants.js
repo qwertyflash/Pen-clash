@@ -1,15 +1,16 @@
-// Arena geometry (world units) and flick tuning.
-export const CX = 500, CY = 500, R = 370;
+// World units. The arena is centred on (CX, CY); VIEW_R is the radius the camera fits.
+export const CX = 500, CY = 500, VIEW_R = 370;
 export const KJ = 4.8, MAXPULL = 230, MAXJ = KJ * MAXPULL;
 export const ANG = 0.38, E = 0.55;
 export const WIN_ROUNDS = 3;
+export const MAX_PLAYERS = 4;
 
-// Player colours: P1 pink, P2 yellow.
-export const COL = ['#ff4d8d', '#ffe23d'];
+// Player colours: P1 pink, P2 yellow, P3 mint, P4 orange.
+export const COL = ['#ff4d8d', '#ffe23d', '#22e1c6', '#ff7a1a'];
 
 // Bump this whenever the online message format changes. Players on different
 // versions are told to refresh instead of silently getting stuck.
-export const PROTOCOL = 3;
+export const PROTOCOL = 4;
 
 export const PENS = [
   { name: 'Ballpoint Blue', tag: 'All-rounder', len: 190, r: 9, mass: 1, fric: 1, body: '#2f52e0', body2: '#14299a', cap: '#13206b', acc: '#dfe6ff', tip: '#c9ced8', ink: '#2747d8', kind: 'ball' },

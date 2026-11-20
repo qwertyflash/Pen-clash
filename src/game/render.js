@@ -1,7 +1,7 @@
-import { CX, CY, R, KJ, MAXJ, COL } from '../core/constants.js';
+import { CX, CY, VIEW_R, KJ, MAXJ, COL } from '../core/constants.js';
 import { $ } from '../core/util.js';
 import { drawPen, drawBadge, rr } from '../ui/draw.js';
-import { arenaC, inkC, trail } from '../ui/arena.js';
+import { arenaCanvas, inkC, trail } from '../ui/arena.js';
 import { S } from './state.js';
 
 export const cv = $('#cv');
@@ -14,7 +14,7 @@ export function resize() {
   if (!r.width) return;
   dpr = Math.min(2, devicePixelRatio || 1);
   cv.width = Math.round(r.width * dpr); cv.height = Math.round(r.height * dpr);
-  const s = Math.min(r.width, r.height) / (2 * R + 70);
+  const s = Math.min(r.width, r.height) / (2 * VIEW_R + 70);
   view = { s, ox: r.width / 2 - CX * s, oy: r.height / 2 - CY * s };
 }
 new ResizeObserver(resize).observe(cv.parentElement);
@@ -64,7 +64,7 @@ export function render(ts) {
   const sh = G.shake > 0.3 ? G.shake : 0;
   cx.translate(view.ox + (Math.random() - 0.5) * sh * view.s, view.oy + (Math.random() - 0.5) * sh * view.s);
   cx.scale(view.s, view.s);
-  cx.drawImage(arenaC, -30, -30);
+  cx.drawImage(arenaCanvas(G.arena), -30, -30);
   G.pens.forEach(trail);
   cx.drawImage(inkC, 0, 0);
   if (G.phase === 'aim') {
