@@ -75,7 +75,7 @@ export function updHud() {
   const ht = lostHost
     ? 'Lost contact with ' + G.pl[0].name + '’s game. Reconnecting…'
     : G.phase !== 'aim'
-      ? G.phase === 'moving' ? 'Watch it fly…' : G.phase === 'over' ? 'Match over' : 'Get ready…'
+      ? G.phase === 'moving' ? 'Watch it fly…' : G.phase === 'over' ? 'Match over' : G.phase === 'pick' ? 'Everyone is choosing a new pen…' : 'Get ready…'
       : canCtl(t) ? (n > 2 && G.mode === 'local' ? G.pl[t].name + ': press anywhere, drag back, release to flick.' : 'Press anywhere, drag back, release to flick. Press near an end for spin.')
         : G.pl[t].bot ? G.pl[t].name + ' is lining up a shot…' : 'Waiting for ' + G.pl[t].name + '…';
   $('#hint').textContent = (G.me < 0 && G.mode === 'online' ? 'Spectating · ' : '') + ht;

@@ -8,6 +8,7 @@ import { render, toClient } from './game/render.js';
 import { startSimClock } from './game/match.js';
 import { guestTick } from './game/online.js';
 import { updHud, toggleDebug } from './game/hud.js';
+import { updPicker } from './ui/picker.js';
 import './game/input.js';
 
 // Keep the last few errors so the debug panel can show them.
@@ -36,6 +37,7 @@ function frame(ts) {
     G.shake *= Math.pow(0.02, dt);
     render(ts);
     updHud();
+    updPicker();
   } else if (!$('#menu').hidden) drawHero(ts);
 }
 requestAnimationFrame(frame);

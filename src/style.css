@@ -152,3 +152,46 @@ button,input{font:inherit;color:inherit}
 #startBtn:disabled{opacity:.55;cursor:default}
 @media(max-width:600px){.oddsRow::after{display:none}.odds{height:18px}.hud.many .chip img{width:28px;height:28px}.hud.many .chip b{font-size:12px}.hud.many .pips i{width:9px;height:9px}}
 @media(max-width:480px){.hud.many .chip img{display:none}.hud.many .chip{padding:4px 6px}}
+
+/* compact match HUD: more room for the arena */
+.gscreen{padding:6px max(1.5vw,6px);gap:5px}
+.hud{gap:6px}
+.chip{gap:7px;padding:3px 8px;border-width:2px;border-radius:12px;box-shadow:3px 3px 0 var(--k)}
+.chip img{width:30px;height:30px;border-width:2px}
+.chip .ci{flex-direction:row;align-items:center;gap:8px;flex-wrap:wrap;row-gap:0}
+.chip b{font-size:14px}
+.chip small{font-size:11px}
+.pips{margin-top:0}
+.pips i{width:9px;height:9px;border-width:1.5px}
+.hud.many .chip{gap:6px;padding:3px 6px}.hud.many .chip img{width:26px;height:26px}
+.oddsRow{gap:8px}
+#rdLbl{font-size:13px}
+.odds{height:12px;border-width:2px;box-shadow:2px 2px 0 var(--k)}
+.odds i{font-size:9px;line-height:1}
+.odds i+i{border-left-width:1.5px}
+.oddsRow::after{font-size:10px}
+.gbar .btn.sm{min-height:34px;padding:3px 12px;font-size:13px;border-width:2px;box-shadow:3px 3px 0 var(--k)}
+#hint{font-size:13px}
+.netlbl{font-size:11px;padding:1px 8px}
+@media(max-width:600px){.chip img{width:24px;height:24px}.chip b{font-size:12px}.odds{height:10px}}
+
+/* choose-a-pen overlay */
+.picker{position:absolute;inset:0;display:grid;place-items:center;background:rgba(13,31,135,.6);backdrop-filter:blur(3px);z-index:5;padding:10px}
+.pbox{background:var(--paper);color:var(--k);border:4px solid var(--k);border-radius:22px;padding:16px;box-shadow:8px 8px 0 var(--k);width:min(100%,640px);max-height:100%;overflow:auto}
+.phead{display:flex;align-items:center;justify-content:space-between;gap:12px}
+.phead h2{font-size:clamp(18px,3.4vw,26px)}
+.ptimer{font-family:Bungee,sans-serif;font-size:20px;background:var(--yel);border:3px solid var(--k);border-radius:12px;padding:2px 10px}
+.pickGrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:10px;margin-top:12px}
+.pickGrid:empty{display:none}
+.pickPen{display:flex;flex-direction:column;gap:4px;padding:8px 10px;border:3px solid var(--k);border-radius:14px;background:#fff;color:var(--k);cursor:pointer;text-align:left;font:inherit;box-shadow:3px 3px 0 var(--k)}
+.pickPen:hover:not(:disabled){background:var(--yel)}
+.pickPen:focus-visible{outline:3px solid var(--mint);outline-offset:3px}
+.pickPen:disabled{opacity:.4;cursor:not-allowed;box-shadow:none}
+.pickPen canvas{width:100%;height:40px}
+.pickPen b{font-size:15px}
+.pickPen small{font-size:12px;color:#4b4f6b}
+.pickPen .mini{display:grid;grid-template-columns:1fr 1fr;gap:2px 8px;font-size:10px;font-weight:700;color:#4b4f6b}
+.pickPen .mini span{display:flex;align-items:center;gap:4px}
+.pickPen .mini i{flex:1;height:5px;background:#e3e6f3;border-radius:3px;overflow:hidden}
+.pickPen .mini b{display:block;height:100%;background:var(--ink)}
+.pnote{margin:10px 0 0;font-size:13px;font-weight:600;color:#4b4f6b}
