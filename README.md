@@ -16,9 +16,16 @@ or online with a 4-letter code.
   - Speed: your next shot is 50% stronger and glides further.
   - Fire: your next shot knocks pens back harder and does double damage.
 - **Damage**: every pen shows its damage % and dents where it was hit hard.
-- **PEN BREAK**: hit a pen hard 3 times in the same spot and it snaps. It keeps playing
+- **PEN BREAK**: hit a pen hard 5 times in the same spot and it snaps. It keeps playing
   (shown broken for the rest of the round), but its ink floods the arena: everything
   gets more slippery and pens that slide through it pick up ink stains.
+
+- **Leaderboard**: matches, wins, win %, rounds, best streak and tournament trophies.
+  "This device" works everywhere; "Everyone" is shared and needs the Node server
+  (Option B below). Static hosting such as Vercel has nowhere to store shared scores.
+- **Tournaments** (online): the host taps *Start tournament* in the lobby. Everyone who
+  joined (up to 8) plays everyone else 1-on-1, the others watch, and a table
+  (3 points a win, then rounds difference) is shown between matches and at the end.
 
 ## Quick start
 
@@ -97,6 +104,9 @@ Runs the game *and* its own relay, so you don't depend on public brokers.
 - **Docker** (Fly.io, Railway, any VPS): `docker build -t pen-clash . && docker run -p 3000:3000 pen-clash`
 - **Plain Node**: `npm ci && npm run build && npm start` (`PORT` env var, default 3000)
 
+The shared leaderboard is saved to `data/leaderboard.json` (set `DATA_DIR` to put it on a
+persistent disk; on Render's free plan the disk is wiped on each deploy).
+
 To keep the static site but use a relay server deployed elsewhere, build with
 `VITE_RELAY_URL=https://your-server.example.com npm run build`.
 
@@ -108,4 +118,6 @@ npm run build && npm run test:e2e        # needs: npm i -D playwright && npx pla
 E2E_DROP=0.3 E2E_P2P=0 npm run test:e2e  # relay drops 30% of messages
 E2E_PLAYERS=4 E2E_ARENA=ice npm run test:e2e
 E2E_PLAYERS=3 E2E_LEAVE=1 npm run test:e2e  # a player closes their tab mid-match
+npm run test:e2e:tour                     # a 3-player tournament, then checks both leaderboards
+E2E_PLAYERS=4 E2E_DROP=0.2 npm run test:e2e:tour
 ```

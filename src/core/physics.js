@@ -7,8 +7,8 @@ import { clamp } from './util.js';
 import { inside } from './arenas.js';
 
 export const SEGS = 5; // a pen is split into 5 spots for "hit in the same place" tracking
-export const BREAK_HITS = 3; // hard hits on one spot that break a pen
-const HARD_HIT = 75; // impulse that counts as a hard hit
+export const BREAK_HITS = 5; // hard hits on one spot that break a pen
+const HARD_HIT = 100; // impulse that counts as a hard hit
 const HIT_COOLDOWN = 0.2; // one collision is many tiny contacts: count it once
 const PICK_R = 20; // booster pickup radius
 const FIRE_KNOCK = 0.9; // extra knockback a fiery pen gives (fraction of the hit)
@@ -77,7 +77,7 @@ function collide(a, b, ev, env) {
   // A pen on fire hits extra hard (a frozen pen shrugs it off).
   if (a.fiery && !b.frozen) { b.vx += j * FIRE_KNOCK * nx * ib; b.vy += j * FIRE_KNOCK * ny * ib; }
   if (b.fiery && !a.frozen) { a.vx -= j * FIRE_KNOCK * nx * ia; a.vy -= j * FIRE_KNOCK * ny * ia; }
-  if (ev) ev.push({ t: 'hit', x: px, y: py, j, fire: a.fiery || b.fiery });
+  if (ev) ev.push({ t: 'hit', x: px, y: py, j, fire: a.fiery || b.fiery, speed: a.speedy || b.speedy, ice: a.frozen || b.frozen });
   wound(a, px, py, j, b.fiery ? 2 : 1, env, ev);
   wound(b, px, py, j, a.fiery ? 2 : 1, env, ev);
 }

@@ -195,3 +195,47 @@ button,input{font:inherit;color:inherit}
 .pickPen .mini i{flex:1;height:5px;background:#e3e6f3;border-radius:3px;overflow:hidden}
 .pickPen .mini b{display:block;height:100%;background:var(--ink)}
 .pnote{margin:10px 0 0;font-size:13px;font-weight:600;color:#4b4f6b}
+
+/* Wide screens (laptops): the arena uses the full height; scores, odds and buttons sit beside it. */
+@media (min-aspect-ratio: 7/5) {
+  .gscreen{display:block;position:relative;padding:0;--side:max(190px,calc((100vw - 100dvh) / 2 - 18px))}
+  .gscreen .stage{position:absolute;inset:0}
+  .gscreen .hud{position:absolute;left:10px;top:10px;width:var(--side);grid-template-columns:minmax(0,1fr)!important;z-index:3}
+  .gscreen .hud .chip{padding:6px 10px}
+  .gscreen .hud .chip img{width:38px;height:38px}
+  .gscreen .hud .chip b{font-size:15px}
+  .gscreen .oddsRow{position:absolute;right:10px;top:10px;width:var(--side);flex-wrap:wrap;z-index:3;row-gap:6px}
+  .gscreen .oddsRow .odds{flex-basis:100%;order:2;height:18px}
+  .gscreen .oddsRow .odds i{font-size:11px}
+  .gscreen #rdLbl{font-size:18px}
+  .gscreen .gbar{position:absolute;left:10px;right:10px;bottom:10px;z-index:3;pointer-events:none;align-items:flex-end}
+  .gscreen .gbar>*{pointer-events:auto}
+  .gscreen .hintBox{position:absolute;right:0;bottom:52px;width:var(--side);align-items:flex-end;text-align:right}
+  .gscreen #hint{text-align:right;font-size:14px}
+  .gscreen .gbar #mute{margin-left:auto}
+}
+
+/* tournament table */
+.rbox.wide{width:min(94%,560px)}
+.ttable{width:100%;border-collapse:collapse;margin:8px 0 14px;font-size:14px;text-align:left}
+.ttable th{font-size:11px;text-transform:uppercase;letter-spacing:.04em;color:#4b4f6b;padding:4px 6px;border-bottom:2px solid var(--k)}
+.ttable td{padding:5px 6px;border-bottom:1px solid #d9dcea;font-weight:700}
+.ttable td.n{text-align:right;font-variant-numeric:tabular-nums}
+.ttable tr.top td{background:#fff6a8}
+.ttable .sw{display:inline-block;width:10px;height:10px;border-radius:50%;border:2px solid var(--k);margin-right:6px;vertical-align:-1px}
+.fixtures{list-style:none;margin:0 0 12px;padding:0;font-size:13px;text-align:left;display:flex;flex-direction:column;gap:3px;max-height:150px;overflow:auto}
+.fixtures li{display:flex;justify-content:space-between;gap:8px;padding:3px 6px;border-radius:6px}
+.fixtures li.now{background:var(--yel);font-weight:800}
+.fixtures li.done{color:#4b4f6b}
+#rTable:empty{display:none}
+
+/* leaderboard */
+.mode.m4{background:#9b8cff}
+#board .card{overflow-x:auto}
+.btabs{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px}
+.ttable.board td,.ttable.board th{white-space:nowrap}
+.bnote{color:#4b4f6b;margin:14px 0}
+.tourBox{margin-top:14px;padding-top:12px;border-top:2px dashed #c9cde0;display:flex;flex-direction:column;gap:10px}
+.tourBox p{margin:0;font-size:14px}
+.tourBox .chips{display:flex;gap:8px}
+#tableBtn{background:var(--mint)}

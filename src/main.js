@@ -6,7 +6,7 @@ import { initMenu } from './ui/menu.js';
 import { S, isAuth } from './game/state.js';
 import { render, toClient } from './game/render.js';
 import { startSimClock } from './game/match.js';
-import { guestTick } from './game/online.js';
+import { guestTick, initOnline } from './game/online.js';
 import { updHud, toggleDebug } from './game/hud.js';
 import { updPicker } from './ui/picker.js';
 import './game/input.js';
@@ -18,6 +18,7 @@ window.addEventListener('unhandledrejection', (e) => keepError(e.reason && e.rea
 
 bindMuteButton($('#mute'));
 initMenu();
+initOnline();
 startSimClock();
 
 // Debug panel: tap the connection label, or press D during a match.
@@ -35,6 +36,8 @@ function frame(ts) {
     for (const q of G.parts) { q.x += q.vx * dt; q.y += q.vy * dt; q.vx *= 0.9; q.vy *= 0.9; q.l -= dt; }
     G.parts = G.parts.filter((q) => q.l > 0);
     G.shake *= Math.pow(0.02, dt);
+    if (G.rings) { for (const r of G.rings) r.l -= dt; G.rings = G.rings.filter((r) => r.l > 0); }
+    if (G.flash) G.flash.l -= dt;
     render(ts);
     updHud();
     updPicker();

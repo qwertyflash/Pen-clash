@@ -120,14 +120,14 @@ function drawFighter(c, G, p, ts) {
   c.save(); c.translate(p.x, p.y); c.rotate(p.a); c.scale(sc, sc); c.globalAlpha = al;
   // Dents where it was hit hard, cracks growing with damage.
   for (let s = 0; s < SEGS; s++) {
-    const n = Math.min(p.segs[s], 3);
+    const n = Math.min(p.segs[s], 4);
     if (!n) continue;
     const x = (-0.5 + (s + 0.5) / SEGS) * p.L;
     c.strokeStyle = '#0b0b14'; c.lineWidth = 1.6;
     for (let k = 0; k < n; k++) {
       c.beginPath(); c.moveTo(x - 6 + k * 5, -p.r * 0.9); c.lineTo(x - 2 + k * 5, -p.r * 0.2); c.lineTo(x - 5 + k * 5, p.r * 0.3); c.lineTo(x - 1 + k * 5, p.r * 0.9); c.stroke();
     }
-    if (n >= 2) { c.fillStyle = 'rgba(255,77,141,.55)'; c.beginPath(); c.arc(x, 0, 4 + n * 2, 0, 7); c.fill(); }
+    if (n >= 3) { c.fillStyle = 'rgba(255,77,141,.55)'; c.beginPath(); c.arc(x, 0, 4 + n * 2, 0, 7); c.fill(); }
   }
   if (p.stain > 0.03 && G.env.flood) {
     c.fillStyle = G.env.flood.col; c.globalAlpha = al * Math.min(0.75, p.stain);
@@ -195,5 +195,26 @@ export function render(ts) {
   const a = G.aim || G.raim;
   if (a && G.phase === 'aim') drawAim(cx, a);
   for (const q of G.parts) { cx.globalAlpha = Math.max(0, q.l / q.m); cx.fillStyle = q.c; cx.beginPath(); cx.arc(q.x, q.y, q.s, 0, 7); cx.fill(); }
+  // Shockwave rings from boosted shots and hits.
+  for (const r of G.rings || []) {
+    const k = 1 - r.l / r.m;
+    cx.globalAlpha = Math.max(0, r.l / r.m); cx.strokeStyle = r.c; cx.lineWidth = r.w * (1 - k * 0.7);
+    cx.beginPath(); cx.arc(r.x, r.y, r.r0 + (r.r1 - r.r0) * k, 0, 7); cx.stroke();
+    if (r.bolt) { // lightning spokes for Speed
+      cx.lineWidth = 3;
+      for (let n = 0; n < 6; n++) {
+        const a = n * 1.05 + r.seed, d0 = 14 + 40 * k, d1 = d0 + 30;
+        cx.beginPath(); cx.moveTo(r.x + Math.cos(a) * d0, r.y + Math.sin(a) * d0);
+        cx.lineTo(r.x + Math.cos(a + 0.18) * (d0 + d1) / 2, r.y + Math.sin(a + 0.18) * (d0 + d1) / 2);
+        cx.lineTo(r.x + Math.cos(a) * d1, r.y + Math.sin(a) * d1); cx.stroke();
+      }
+    }
+  }
   cx.globalAlpha = 1;
+  // Full-screen colour flash.
+  if (G.flash && G.flash.l > 0) {
+    cx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    cx.globalAlpha = 0.32 * (G.flash.l / G.flash.m); cx.fillStyle = G.flash.c; cx.fillRect(0, 0, w, h);
+    cx.globalAlpha = 1;
+  }
 }

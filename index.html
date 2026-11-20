@@ -21,7 +21,8 @@
   <div class="modes">
    <button class="mode m1" data-mode="bot"><b>Vs Bot</b><span>Offline. Take on 1 to 3 bots.</span></button>
    <button class="mode m2" data-mode="local"><b>Pass &amp; Play</b><span>Offline. 2 to 4 players, one device.</span></button>
-   <button class="mode m3" data-mode="online"><b>Online</b><span>Up to 4 players with a 4-letter code.</span></button>
+   <button class="mode m3" data-mode="online"><b>Online</b><span>Up to 4 players, or a tournament for up to 8.</span></button>
+   <button class="mode m4" id="boardBtn"><b>Leaderboard</b><span>Wins, streaks and trophies.</span></button>
   </div>
   <details class="how">
    <summary>How to play</summary>
@@ -61,10 +62,25 @@
     <p id="lobbyArena" class="muted" style="margin:14px 0 0;font-weight:700"></p>
     <ul id="lobbyList" class="plist"></ul>
     <button id="startBtn" class="btn big pink" style="width:100%" hidden>Start match</button>
+    <div id="tourBox" class="tourBox" hidden>
+     <p><b>Tournament:</b> everyone plays everyone 1-on-1 (up to 8 players), the others watch. Rounds to win a match:</p>
+     <div class="chips" id="tourTarget"><button class="chipb" data-k="1" aria-pressed="false">1</button><button class="chipb" data-k="2" aria-pressed="true">2</button><button class="chipb" data-k="3" aria-pressed="false">3</button></div>
+     <button id="tourBtn" class="btn big" style="width:100%">Start tournament</button>
+    </div>
    </div>
    <p id="netStatus" class="muted" style="margin:14px 0 0"></p>
   </div>
   <p class="note">Send your friends the same link. Up to 4 players: they pick a fighter, tap Online and enter the code, then the host taps Start. On the same Wi-Fi the two devices connect directly to each other; otherwise moves go through a relay server. Anyone who joins after the start, or beyond 4 players, watches as a spectator.</p>
+ </div>
+</section>
+
+<section id="board" class="screen" hidden>
+ <div class="wrap">
+  <div class="bar"><button class="btn ghost sm" data-back="menu">Back</button><h2>Leaderboard</h2></div>
+  <div class="card">
+   <div class="chips btabs"><button class="chipb" data-tab="local" aria-pressed="true">This device</button><button class="chipb" data-tab="server" aria-pressed="false">Everyone</button><button class="btn sm ghost" id="boardClear" style="margin-left:auto">Clear</button></div>
+   <div id="boardBody"></div>
+  </div>
  </div>
 </section>
 
@@ -77,13 +93,17 @@
   <div id="picker" class="picker" hidden>
    <div class="pbox"><div class="phead"><h2 id="pickTitle"></h2><span id="pickTimer" class="ptimer"></span></div><div id="pickGrid" class="pickGrid"></div><p id="pickNote" class="pnote"></p></div>
   </div>
+  <div id="standings" class="result" hidden>
+   <div class="rbox wide"><h2 id="stTitle">Tournament table</h2><div id="stTable"></div><div class="rrow"><button id="stClose" class="btn ghost">Close</button></div></div>
+  </div>
   <div id="result" class="result" hidden>
    <div class="rbox"><img id="rAv" alt=""><h2 id="rTitle"></h2><p id="rScore"></p>
+    <div id="rTable"></div>
     <div class="rrow"><button id="rAgain" class="btn pink">Rematch</button><button id="rMenu" class="btn ghost">Menu</button></div>
     <p id="rNote" class="muted" style="font-size:14px;margin:12px 0 0;font-weight:600"></p></div>
   </div>
  </div>
- <div class="gbar"><button class="btn sm ghost" id="quit">Menu</button><div class="hintBox"><p id="hint"></p><button id="netLbl" class="netlbl" hidden title="Connection details"></button></div><button class="btn sm ghost" id="mute">Sound on</button></div>
+ <div class="gbar"><button class="btn sm ghost" id="quit">Menu</button><button class="btn sm" id="tableBtn" hidden>Table</button><div class="hintBox"><p id="hint"></p><button id="netLbl" class="netlbl" hidden title="Connection details"></button></div><button class="btn sm ghost" id="mute">Sound on</button></div>
  <pre id="debug" class="debug" hidden></pre>
 </section>
 

@@ -10,7 +10,8 @@ import { openCam, onAvatarPicked } from './camera.js';
 import { show } from './screens.js';
 import { S, saveCfg, isAuth } from '../game/state.js';
 import { startOffline, startMatch, clearTimers } from '../game/match.js';
-import { joinRoom, leaveNet, lobbyReset, requestRematch, stat, hostStartMatch } from '../game/online.js';
+import { joinRoom, leaveNet, lobbyReset, requestRematch, stat, hostStartMatch, hostStartTournament, setTourTarget, showStandings, tourBackToLobby } from '../game/online.js';
+import { initBoard } from './board.js';
 import { resetHud } from '../game/hud.js';
 
 function statRows(d) {
@@ -128,6 +129,16 @@ export function initMenu() {
     joinRoom(c, 'guest');
   };
   $('#startBtn').onclick = () => { resetHud(); hostStartMatch(); };
+  $('#tourBtn').onclick = () => { resetHud(); hostStartTournament(); };
+  $('#tourTarget').onclick = (e) => {
+    const b = e.target.closest('[data-k]');
+    if (!b) return;
+    setTourTarget(+b.dataset.k);
+    $$('#tourTarget .chipb').forEach((c) => c.setAttribute('aria-pressed', c === b));
+  };
+  $('#tableBtn').onclick = showStandings;
+  $('#stClose').onclick = () => { $('#standings').hidden = true; };
+  initBoard();
   $('#copyCode').onclick = () => {
     const c = $('#codeBig').textContent;
     try { navigator.clipboard.writeText(c).then(() => stat('Code copied. Send it to your friend.'), () => stat('Copy blocked here. Read the code out instead.')); }
@@ -135,6 +146,9 @@ export function initMenu() {
   };
 
   // Result + quit
-  $('#rAgain').onclick = () => { if (S.G.mode !== 'online' || isAuth()) startMatch(); else requestRematch(); };
+  $('#rAgain').onclick = () => {
+    if (tourBackToLobby()) return;
+    if (S.G.mode !== 'online' || isAuth()) startMatch(); else requestRematch();
+  };
   $('#rMenu').onclick = $('#quit').onclick = () => { leaveNet(); clearTimers(); S.G = null; $('#result').hidden = true; show('menu'); };
 }

@@ -22,7 +22,7 @@ function updOdds(G, now) {
   }
   const target = winOdds({
     pens: G.pens, inMatch: G.pl.map((p) => !p.gone), sc: G.sc, turn: G.turn, phase: G.phase,
-    winner: G.winner, arena: G.arena, target: WIN_ROUNDS,
+    winner: G.winner, arena: G.arena, target: G.target || WIN_ROUNDS,
   });
   // Ease towards the new estimate so the bar doesn't jitter while pens slide.
   shown = shown.map((v, i) => v + ((target[i] || 0) - v) * 0.35);
@@ -68,7 +68,7 @@ export function updHud() {
     const out = p.gone || (G.pens[i] && !G.pens[i].alive && G.phase !== 'between');
     const cls = ['chip', n === 2 && i === 1 ? 'r' : '', act ? 'act' : '', out ? 'out' : ''].join(' ');
     const sub = p.gone ? 'Left the match' : PENS[p.pen].name;
-    return `<div class="${cls}" style="--pc:${COL[i]}"><img src="${safeAv(p.av)}" alt=""><div class="ci"><b>${esc(p.name)}${you}</b><small>${esc(sub)}</small><div class="pips">${Array.from({ length: WIN_ROUNDS }, (_, k) => `<i class="${k < G.sc[i] ? 'on' : ''}"></i>`).join('')}</div></div></div>`;
+    return `<div class="${cls}" style="--pc:${COL[i]}"><img src="${safeAv(p.av)}" alt=""><div class="ci"><b>${esc(p.name)}${you}</b><small>${esc(sub)}</small><div class="pips">${Array.from({ length: G.target || WIN_ROUNDS }, (_, k) => `<i class="${k < G.sc[i] ? 'on' : ''}"></i>`).join('')}</div></div></div>`;
   }).join('');
   $('#rdLbl').textContent = G.phase === 'over' ? 'Final' : 'Round ' + G.rd;
   const t = G.turn;
