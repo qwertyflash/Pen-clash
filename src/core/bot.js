@@ -1,26 +1,36 @@
 // Inkbot: tries random shots in a copy of the world and keeps the best one.
-import { CX, CY, MAXJ } from './constants.js';
+import { MAXJ } from './constants.js';
+import { edgeDist } from './arenas.js';
 import { step, moving, flickPen } from './physics.js';
 
-function scoreSim(pens, i, t, jx, jy) {
+function scoreSim(pens, ar, i, t, jx, jy) {
   const P = pens.map((p) => ({ ...p }));
   flickPen(P[i], t, jx, jy);
-  for (let k = 0; k < 720; k++) { step(P, 1 / 120, null); if (k % 30 === 29 && !moving(P)) break; }
-  const me = P[i], op = P[1 - i];
-  return (op.alive ? 0 : 100) - (me.alive ? 0 : 170) + Math.hypot(op.x - CX, op.y - CY) / 8 - Math.hypot(me.x - CX, me.y - CY) / 5;
+  for (let k = 0; k < 720; k++) { step(P, 1 / 120, null, ar); if (k % 30 === 29 && !moving(P)) break; }
+  const me = P[i];
+  let s = me.alive ? edgeDist(ar, me.x, me.y) / 5 : -170;
+  for (const op of P) {
+    if (op === me || !pens[op.i].alive) continue;
+    s += op.alive ? -edgeDist(ar, op.x, op.y) / 8 : 100;
+  }
+  return s;
 }
 
-/** Plan a shot for pen i at difficulty df (0 easy, 1 pro, 2 insane). */
-export function botPlan(pens, i, df) {
-  const me = pens[i], op = pens[1 - i], N = [16, 45, 90][df];
+/** Plan a shot for pen i at difficulty df (0 easy, 1 pro, 2 insane) on arena ar. */
+export function botPlan(pens, ar, i, df) {
+  const me = pens[i], N = [16, 45, 90][df];
+  const foes = pens.filter((p) => p !== me && p.alive);
+  // Prefer the opponent closest to falling off.
+  foes.sort((a, b) => edgeDist(ar, a.x, a.y) - edgeDist(ar, b.x, b.y));
   let best = null;
   for (let k = 0; k < N; k++) {
+    const op = foes[Math.random() < 0.6 ? 0 : (Math.random() * foes.length) | 0] || me;
     const t = (Math.random() - 0.5) * 0.8, u = (Math.random() - 0.5) * 0.8;
     const tx = op.x + Math.cos(op.a) * u * op.L, ty = op.y + Math.sin(op.a) * u * op.L;
     const gx = me.x + Math.cos(me.a) * t * me.L, gy = me.y + Math.sin(me.a) * t * me.L;
     const an = Math.atan2(ty - gy, tx - gx) + (Math.random() - 0.5) * (k < N * 0.6 ? 0.3 : 2.4);
     const pw = MAXJ * (0.3 + Math.random() * 0.7), jx = Math.cos(an) * pw, jy = Math.sin(an) * pw;
-    const s = scoreSim(pens, i, t, jx, jy);
+    const s = scoreSim(pens, ar, i, t, jx, jy);
     if (!best || s > best.s) best = { t, jx, jy, s };
   }
   const nz = [0.2, 0.06, 0.012][df];

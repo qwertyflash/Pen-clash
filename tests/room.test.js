@@ -51,6 +51,30 @@ test('state converges even when half the messages are lost', async () => {
   a.leave(); b.leave();
 });
 
+test('a lost change after the first snapshot is repaired (lobby names)', async () => {
+  // Bus that loses exactly the first delta ('u') a sends.
+  const members = new Set();
+  let dropped = false;
+  const mk = (who) => {
+    const me = { rx: () => {} };
+    members.add(me);
+    return {
+      name: 'relay',
+      send(s) {
+        if (who === 'a' && !dropped && JSON.parse(s).k === 'u') { dropped = true; return; }
+        for (const m of members) if (m !== me) setTimeout(() => m.rx(s), 1);
+      },
+      onMessage(fn) { me.rx = fn; }, onReconnect() {}, close() { members.delete(me); },
+    };
+  };
+  const a = createRoom(mk('a'), 'aaaa1'), b = createRoom(mk('b'), 'bbbb2');
+  await wait(30);
+  await a.presence({ role: 'guest', name: 'Ann' });
+  assert.ok(await until(() => dropped));
+  assert.ok(await until(() => peerOf(b, 'aaaa1')?.presence.name === 'Ann', 6000), 'b never learned a\'s name');
+  a.leave(); b.leave();
+});
+
 test('leaving removes the peer', async () => {
   const bus = makeHub();
   const a = createRoom(bus('relay'), 'aaaa1'), b = createRoom(bus('relay'), 'bbbb2');

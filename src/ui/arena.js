@@ -1,38 +1,68 @@
-// The paper arena (drawn once) and the ink layer (trails + splats, persists per match).
-import { CX, CY, R } from '../core/constants.js';
+// Arena backgrounds (drawn once per arena) and the ink layer (trails + splats, per match).
+import { CX, CY } from '../core/constants.js';
+import { ARENAS, arenaPath, edgePoint } from '../core/arenas.js';
 
-export const arenaC = document.createElement('canvas');
-arenaC.width = arenaC.height = 1060;
-{
-  const a = arenaC.getContext('2d');
+const cache = new Map();
+
+/** 1060x1060 canvas of the arena; draw it at (-30, -30) in world coordinates. */
+export function arenaCanvas(ar = ARENAS[0]) {
+  let c = cache.get(ar.id);
+  if (c) return c;
+  c = document.createElement('canvas');
+  c.width = c.height = 1060;
+  const a = c.getContext('2d'), th = ar.theme;
   a.translate(30, 30);
-  a.fillStyle = 'rgba(4,8,60,.5)'; a.beginPath(); a.arc(CX + 10, CY + 16, R + 18, 0, 7); a.fill();
-  a.fillStyle = '#0b0b14'; a.beginPath(); a.arc(CX, CY, R + 18, 0, 7); a.fill();
-  a.fillStyle = '#fbf8ef'; a.beginPath(); a.arc(CX, CY, R + 12, 0, 7); a.fill();
-  a.save(); a.beginPath(); a.arc(CX, CY, R + 12, 0, 7); a.clip();
+  // drop shadow, black rim, paper
+  a.save(); a.translate(10, 16); a.fillStyle = 'rgba(4,8,60,.5)'; arenaPath(a, ar, 18); a.fill(); a.restore();
+  a.fillStyle = '#0b0b14'; arenaPath(a, ar, 18); a.fill();
+  a.fillStyle = th.paper; arenaPath(a, ar, 12); a.fill();
+  a.save(); arenaPath(a, ar, 12); a.clip();
   for (let g = 20; g <= 1000; g += 40) {
     const major = (g - 20) % 200 === 0;
-    a.strokeStyle = major ? 'rgba(22,49,180,.22)' : 'rgba(22,49,180,.1)'; a.lineWidth = major ? 2 : 1.4;
+    a.strokeStyle = `rgba(${th.grid},${major ? 0.22 : 0.1})`; a.lineWidth = major ? 2 : 1.4;
     a.beginPath(); a.moveTo(g, 0); a.lineTo(g, 1000); a.moveTo(0, g); a.lineTo(1000, g); a.stroke();
   }
-  const rg = a.createRadialGradient(CX, CY, R * 0.82, CX, CY, R + 12);
-  rg.addColorStop(0, 'rgba(255,77,141,0)'); rg.addColorStop(1, 'rgba(255,77,141,.2)');
+  if (ar.id === 'ice') { // frosty streaks
+    a.strokeStyle = 'rgba(255,255,255,.7)'; a.lineWidth = 3; a.lineCap = 'round';
+    for (let k = 0; k < 26; k++) { const x = 160 + ((k * 97) % 680), y = 160 + ((k * 61) % 680); a.beginPath(); a.moveTo(x, y); a.lineTo(x + 40, y + 12); a.stroke(); }
+  }
+  const rg = a.createRadialGradient(CX, CY, ar.r * 0.8, CX, CY, ar.r * 1.45);
+  rg.addColorStop(0, `rgba(${th.glow},0)`); rg.addColorStop(1, `rgba(${th.glow},.3)`);
   a.fillStyle = rg; a.fillRect(0, 0, 1000, 1000); a.restore();
-  a.strokeStyle = '#ff4d8d'; a.lineWidth = 4; a.setLineDash([16, 12]); a.beginPath(); a.arc(CX, CY, R, 0, 7); a.stroke(); a.setLineDash([]);
-  a.strokeStyle = 'rgba(11,11,20,.16)'; a.lineWidth = 3; a.beginPath(); a.arc(CX, CY, 64, 0, 7); a.stroke();
-  a.beginPath(); a.moveTo(CX - 14, CY); a.lineTo(CX + 14, CY); a.moveTo(CX, CY - 14); a.lineTo(CX, CY + 14); a.stroke();
+  a.strokeStyle = th.edge; a.lineWidth = 4; a.setLineDash([16, 12]); arenaPath(a, ar, 0); a.stroke(); a.setLineDash([]);
+  a.strokeStyle = 'rgba(11,11,20,.16)'; a.lineWidth = 3;
+  if (!ar.obstacles.some((o) => Math.hypot(o.x - CX, o.y - CY) < 60)) {
+    a.beginPath(); a.arc(CX, CY, 64, 0, 7); a.stroke();
+    a.beginPath(); a.moveTo(CX - 14, CY); a.lineTo(CX + 14, CY); a.moveTo(CX, CY - 14); a.lineTo(CX, CY + 14); a.stroke();
+  }
+  for (const o of ar.obstacles) drawEraser(a, o);
+  cache.set(ar.id, c);
+  return c;
 }
 
+function drawEraser(a, o) {
+  a.save();
+  a.fillStyle = 'rgba(6,10,60,.25)'; a.beginPath(); a.arc(o.x + 5, o.y + 8, o.r, 0, 7); a.fill();
+  const g = a.createRadialGradient(o.x - o.r * 0.3, o.y - o.r * 0.35, o.r * 0.1, o.x, o.y, o.r);
+  g.addColorStop(0, '#ffc2d6'); g.addColorStop(1, '#ff6f9f');
+  a.fillStyle = g; a.strokeStyle = '#0b0b14'; a.lineWidth = 3; a.beginPath(); a.arc(o.x, o.y, o.r, 0, 7); a.fill(); a.stroke();
+  a.fillStyle = '#5a6fd8'; a.beginPath(); a.arc(o.x, o.y, o.r * 0.55, 0, 7); a.fill(); a.stroke();
+  a.restore();
+}
+
+/* ---------- ink layer ---------- */
 export const inkC = document.createElement('canvas');
 inkC.width = inkC.height = 1000;
 const ix = inkC.getContext('2d');
+let inkArena = ARENAS[0];
 
-export function resetInk() { ix.clearRect(0, 0, 1000, 1000); }
+/** Clear the ink and remember which arena it is clipped to. */
+export function resetInk(ar = inkArena) { inkArena = ar; ix.clearRect(0, 0, 1000, 1000); }
 
-function inkClip(f) { ix.save(); ix.beginPath(); ix.arc(CX, CY, R + 12, 0, 7); ix.clip(); f(); ix.restore(); }
+function inkClip(f) { ix.save(); arenaPath(ix, inkArena, 12); ix.clip(); f(); ix.restore(); }
 
 export function splat(x, y, col) {
-  const an = Math.atan2(y - CY, x - CX), ex = CX + Math.cos(an) * (R - 6), ey = CY + Math.sin(an) * (R - 6);
+  const [ex, ey] = edgePoint(inkArena, x, y, 6), an = Math.atan2(y - ey, x - ex);
   inkClip(() => {
     ix.fillStyle = col; ix.globalAlpha = 0.85; ix.beginPath(); ix.arc(ex, ey, 26, 0, 7); ix.fill();
     for (let k = 0; k < 12; k++) {

@@ -1,6 +1,8 @@
-// Match rules: rounds, turns, scoring, the bot, and the fixed-step simulation clock.
+// Match rules for 2-4 players: turns go round the table, a pen that falls off is out
+// for the round, the last pen standing wins the round, first to WIN_ROUNDS wins.
 import { CX, CY, PENS, WIN_ROUNDS } from '../core/constants.js';
 import { $, clamp } from '../core/util.js';
+import { arenaById, spawnPoints } from '../core/arenas.js';
 import { mkPen, step, moving, flickPen } from '../core/physics.js';
 import { botPlan } from '../core/bot.js';
 import { sfx } from '../ui/audio.js';
@@ -12,17 +14,19 @@ import { S, isAuth } from './state.js';
 import { netTick } from './online.js';
 
 const nm = (i) => S.G.pl[i].name;
+const BOT_NAMES = ['Inkbot', 'Blotbot', 'Smudgebot'];
 
-export function newGame(mode, pl) {
+export function newGame(mode, pl, arenaId) {
   clearTimers();
+  const arena = arenaById(arenaId);
   S.G = {
-    mode, pl, pens: [], turn: 0, first: 0, phase: 'idle', sc: [0, 0], rd: 1, mover: 0,
+    mode, pl, arena, pens: [], turn: 0, first: 0, phase: 'idle', sc: pl.map(() => 0), rd: 1, mover: 0,
     aim: null, raim: null, slow: 0, shake: 0, parts: [],
     mid: (Math.random() * 1e9) | 0, msgId: 0, msg: null, me: -1, winner: -1, dirty: true, sig: '',
     // online: the host's last shot, and a guest's local replay of it
     shotN: 0, shot: null, sim: false, simEnd: 0, pred: 0, lastShot: -1, auth: null,
   };
-  resetInk();
+  resetInk(arena);
   $('#result').hidden = true;
 }
 
@@ -31,10 +35,26 @@ export function clearTimers() {
   if (G) { clearTimeout(G.tm); clearTimeout(G.tm2); }
 }
 
+/** Players still in the match (not disconnected). */
+export const activeIdx = () => S.G.pl.map((p, i) => (p.gone ? -1 : i)).filter((i) => i >= 0);
+const aliveIdx = () => activeIdx().filter((i) => S.G.pens[i].alive);
+
+/** Next seat after `from` (cyclic) that passes `ok`. */
+function nextSeat(from, ok) {
+  const n = S.G.pl.length;
+  for (let k = 1; k <= n; k++) { const j = (from + k) % n; if (ok(j)) return j; }
+  return from;
+}
+const nextAlive = (from) => nextSeat(from, (j) => !S.G.pl[j].gone && S.G.pens[j].alive);
+
 export function placePens() {
-  const G = S.G;
-  G.pens = [mkPen(0, PENS[G.pl[0].pen], CX - 175, CY, Math.PI / 2), mkPen(1, PENS[G.pl[1].pen], CX + 175, CY, Math.PI / 2)];
-  G.pens.forEach((p) => { p.tip = null; });
+  const G = S.G, sp = spawnPoints(G.pl.length);
+  G.pens = G.pl.map((pl, i) => {
+    const p = mkPen(i, PENS[pl.pen], sp[i][0], sp[i][1], sp[i][2]);
+    p.tip = null;
+    if (pl.gone) { p.alive = false; p.fall = 1; }
+    return p;
+  });
 }
 
 const turnLine = () => (S.G.mode === 'bot' && S.G.turn === 0 ? 'Your turn' : nm(S.G.turn) + "'s turn");
@@ -46,8 +66,9 @@ function say(t, ms = 1200) {
 
 export function startMatch() {
   const G = S.G;
-  G.sc = [0, 0]; G.rd = 1; G.first = 0; G.winner = -1; G.mid = (Math.random() * 1e9) | 0;
-  resetInk(); $('#result').hidden = true;
+  G.sc = G.pl.map(() => 0); G.rd = 1; G.winner = -1; G.mid = (Math.random() * 1e9) | 0;
+  G.first = activeIdx()[0] ?? 0;
+  resetInk(G.arena); $('#result').hidden = true;
   startRound();
 }
 
@@ -77,17 +98,53 @@ const q3 = (v) => Math.round(v * 1000) / 1000;
 
 function onSettle() {
   const G = S.G;
-  const d0 = !G.pens[0].alive, d1 = !G.pens[1].alive;
   G.pens.forEach((p) => { p.vx = p.vy = p.w = 0; p.x = q3(p.x); p.y = q3(p.y); p.a = q3(p.a); });
-  if (!d0 && !d1) { G.turn = 1 - G.turn; G.phase = 'aim'; say(turnLine(), 800); maybeBot(); return; }
-  const w = d0 && d1 ? 1 - G.mover : d0 ? 1 : 0;
-  G.sc[w]++; G.phase = 'between';
-  say(d0 && d1 ? 'Double KO! Point ' + nm(w) : w !== G.mover ? nm(G.mover) + ' fell off!' : 'Knockout!', 1500);
-  clearTimeout(G.tm);
+  const alive = aliveIdx();
+  if (alive.length >= 2) {
+    G.turn = nextAlive(G.mover); G.phase = 'aim'; say(turnLine(), 800); maybeBot();
+    return;
+  }
+  let w = -1, msg;
+  const two = G.pl.length === 2;
+  if (alive.length === 1) {
+    w = alive[0];
+    msg = two ? (w === G.mover ? 'Knockout!' : nm(G.mover) + ' fell off!') : nm(w) + ' wins the round!';
+  } else {
+    // Everyone left fell in the same shot: the point goes to the one other pen that fell with the shooter.
+    const fellNow = activeIdx().filter((i) => i !== G.mover && G.shot && G.shot.s[i][3] && !G.pens[i].alive);
+    if (fellNow.length === 1) { w = fellNow[0]; msg = 'Double KO! Point ' + nm(w); }
+  }
+  endRound(w, msg);
+}
+
+/** Award the round to w (or replay it when w < 0), then start the next round or end the match. */
+function endRound(w, msg) {
+  const G = S.G;
+  G.phase = 'between'; G.aim = G.raim = null;
+  if (w >= 0) G.sc[w]++;
+  say(w >= 0 ? msg : 'Everyone fell! Replay the round', 1500);
+  clearTimeout(G.tm); clearTimeout(G.tm2);
   G.tm = setTimeout(() => {
-    if (G.sc[w] >= WIN_ROUNDS) { G.phase = 'over'; G.winner = w; G.dirty = true; showResult(); }
-    else { G.rd++; G.first = 1 - G.first; startRound(); }
+    if (w >= 0 && G.sc[w] >= WIN_ROUNDS) { G.phase = 'over'; G.winner = w; G.dirty = true; showResult(); return; }
+    if (w >= 0) { G.rd++; G.first = nextSeat(G.first, (j) => !G.pl[j].gone); }
+    startRound();
   }, 1700);
+}
+
+/** An online player disconnected mid-match: take their pen out and carry on. */
+export function removePlayer(i) {
+  const G = S.G;
+  if (!G || !G.pl[i] || G.pl[i].gone) return;
+  G.pl[i].gone = true;
+  const p = G.pens[i];
+  if (p && p.alive) { p.alive = false; p.fall = 1; }
+  G.dirty = true;
+  if (G.first === i) G.first = nextSeat(i, (j) => !G.pl[j].gone);
+  if (G.phase === 'aim' || G.phase === 'moving') {
+    const alive = aliveIdx();
+    if (alive.length === 1 && G.phase === 'aim') endRound(alive[0], nm(alive[0]) + ' wins the round!');
+    else if (G.phase === 'aim' && G.turn === i) { G.turn = nextAlive(i); G.aim = G.raim = null; say(turnLine(), 800); }
+  }
 }
 
 function maybeBot() {
@@ -97,8 +154,8 @@ function maybeBot() {
   if (!pl.bot) return;
   clearTimeout(G.tm2);
   G.tm2 = setTimeout(() => {
-    if (G.phase !== 'aim' || G.turn !== i) return;
-    const b = botPlan(G.pens, i, pl.diff), t0 = performance.now();
+    if (S.G !== G || G.phase !== 'aim' || G.turn !== i) return;
+    const b = botPlan(G.pens, G.arena, i, pl.diff), t0 = performance.now();
     const an = () => {
       if (S.G !== G || G.phase !== 'aim' || G.turn !== i) return;
       const k = Math.min(1, (performance.now() - t0) / 700);
@@ -114,7 +171,7 @@ export function onEvent(e) {
   const G = S.G;
   if (e.t === 'hit') {
     if (e.j < 40) return;
-    sparks(e.x, e.y, Math.min(22, 6 + e.j / 50), [G.pens[0].d.ink, G.pens[1].d.ink, '#ffe23d', '#0b0b14']);
+    sparks(e.x, e.y, Math.min(22, 6 + e.j / 50), [...new Set(G.pens.map((p) => p.d.ink)), '#ffe23d', '#0b0b14']);
     G.shake = Math.min(16, G.shake + e.j / 70);
     sfx.hit(e.j);
   } else {
@@ -128,9 +185,12 @@ export function onEvent(e) {
 
 export function startOffline() {
   const { cfg, mode } = S;
-  const pl = [{ ...cfg[0], local: true }];
-  pl.push(mode === 'bot' ? { name: 'Inkbot', pen: S.botPen, av: BOTAV, bot: true, diff: S.diff, local: true } : { ...cfg[1], local: true });
-  newGame(mode, pl);
+  let pl;
+  if (mode === 'bot') {
+    pl = [{ ...cfg[0], local: true }];
+    for (let k = 0; k < S.bots; k++) pl.push({ name: BOT_NAMES[k], pen: (Math.random() * PENS.length) | 0, av: BOTAV, bot: true, diff: S.diff, local: true });
+  } else pl = cfg.slice(0, S.locals).map((c) => ({ ...c, local: true }));
+  newGame(mode, pl, S.arena);
   show('game');
   startMatch();
 }
@@ -139,7 +199,7 @@ export function showResult() {
   const G = S.G, w = G.winner, p = G.pl[w];
   $('#rAv').src = safeAv(p.av);
   $('#rTitle').textContent = (G.mode === 'bot' && w === 0) || G.me === w ? 'You win!' : p.name + ' wins!';
-  $('#rScore').textContent = G.sc[0] + ' – ' + G.sc[1];
+  $('#rScore').textContent = G.sc.join(' – ');
   $('#rNote').textContent = '';
   $('#rAgain').hidden = G.mode === 'online' && G.me < 0;
   $('#result').hidden = false;
@@ -165,7 +225,7 @@ function simTick() {
     acc += sdt;
     const ev = [];
     let n = 0;
-    while (acc >= 1 / 240 && n < 120) { step(G.pens, 1 / 240, ev); acc -= 1 / 240; n++; }
+    while (acc >= 1 / 240 && n < 120) { step(G.pens, 1 / 240, ev, G.arena); acc -= 1 / 240; n++; }
     ev.forEach((e) => { e.sim = true; onEvent(e); });
     if (auth) G.pens.forEach((p) => { if (!p.alive) p.fall = Math.min(1, p.fall + dt * 1.7); });
     const settled = !moving(G.pens) && G.pens.every((p) => p.alive || p.fall >= 1);

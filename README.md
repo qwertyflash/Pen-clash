@@ -1,7 +1,14 @@
 # Pen Clash
 
-Flick-to-fight pen battles on a graph-paper arena. Play against Inkbot, pass & play on
-one device, or play online with a 4-letter code.
+Flick-to-fight pen battles. 2 to 4 players: against 1-3 bots, pass & play on one device,
+or online with a 4-letter code.
+
+- **Arenas**: Classic Paper, Ice Rink (slippery), Tiny Desk (small), Square Notebook
+  (deadly corners) and Eraser Field (fixed erasers to bank shots off).
+- **Rules**: turns go round the table. A pen that falls off is out for the round; the
+  last pen standing wins the round. First to 3 rounds wins.
+- **Live win chance**: the bar under the scores estimates each player's chance to win
+  the match from the scoreboard, how close each pen is to the edge, and whose turn it is.
 
 ## Quick start
 
@@ -23,7 +30,7 @@ index.html            page markup (screens: menu, setup, online lobby, game)
 src/
   main.js             entry: wires up UI, render loop, debug panel
   style.css
-  core/               no DOM: constants, physics, bot AI, helpers
+  core/               no DOM: constants, arenas, physics, bot AI, win-chance odds
   ui/                 audio, drawing, avatars, camera, menu, screens
   game/
     state.js          shared state (current match, online session)
@@ -43,6 +50,9 @@ scripts/e2e.js        two-browser online test with real mouse drags
 
 ## How online play works
 
+- The **host** creates the match, everyone joins with the code (up to 4 players), and the
+  host taps Start. Late joiners watch. If a player disconnects, their pen is removed
+  and the others play on.
 - The **host** runs the real match. When something changes it sends a small state
   object, plus a keep-alive copy every second, so a lost message is repaired within a second.
 - Each shot is sent as *where the pens started + the flick*. Every guest replays the
@@ -86,4 +96,6 @@ To keep the static site but use a relay server deployed elsewhere, build with
 npm test                      # unit tests
 npm run build && npm run test:e2e        # needs: npm i -D playwright && npx playwright install chromium
 E2E_DROP=0.3 E2E_P2P=0 npm run test:e2e  # relay drops 30% of messages
+E2E_PLAYERS=4 E2E_ARENA=ice npm run test:e2e
+E2E_PLAYERS=3 E2E_LEAVE=1 npm run test:e2e  # a player closes their tab mid-match
 ```

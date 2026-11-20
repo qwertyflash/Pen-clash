@@ -19,4 +19,6 @@ jobs:
           npm i --no-save playwright@1.63.0
           npx playwright install --with-deps chromium
           npm run test:e2e
-          E2E_P2P=0 E2E_DROP=0.3 npm run test:e2e
+          E2E_PLAYERS=2 E2E_P2P=0 E2E_DROP=0.3 npm run test:e2e
+          E2E_PLAYERS=4 E2E_ARENA=erasers npm run test:e2e
+          E2E_PLAYERS=3 E2E_LEAVE=1 E2E_ARENA=square npm run test:e2e

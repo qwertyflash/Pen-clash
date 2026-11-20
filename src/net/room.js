@@ -16,6 +16,9 @@ const HB_MS = 2000, STALE_MS = 12000, LINK_IDLE_MS = 7000, LINK_RETRY_MS = 20000
 export function createRoom(bus, myId, { p2p = true } = {}) {
   const mine = {}, others = new Map(), links = new Map(), linkFailedAt = new Map(), rtt = new Map();
   let handlers = [], nq = 0, pend = null, pt = 0, pendAt = 0, dead = false, seq = 0, lastHb = 0;
+  // Presence version: bumped on every change. Deltas say which version they build on, and
+  // heartbeats carry the latest, so a peer that missed a delta notices and asks for a snapshot.
+  let pv = 0, sentPv = 0;
   const useP2P = p2p && p2pSupported();
   if (useP2P) mine.rtc = 1;
 
@@ -42,12 +45,16 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
     const s = JSON.stringify(m), l = !viaRelay && openLink(to);
     if (l) l.send(s); else bus.send(s);
   };
-  const full = (hello) => out({ k: 'f', p: mine, ...(hello ? { hello: 1 } : {}) });
+  const full = (hello) => {
+    // A snapshot includes any change still waiting to be sent.
+    clearTimeout(pt); pt = 0; pend = null; sentPv = pv;
+    out({ k: 'f', p: mine, pv, ...(hello ? { hello: 1 } : {}) });
+  };
   const merge = (o, q) => {
     if (!q || typeof q !== 'object') return;
     for (const k of Object.keys(q)) { if (k === '__proto__' || k === 'constructor' || k === 'prototype') continue; if (q[k] === null) delete o[k]; else o[k] = q[k]; }
   };
-  const flush = () => { clearTimeout(pt); pt = 0; if (!pend) return; const q = pend; pend = null; out({ k: 'u', p: q }); };
+  const flush = () => { clearTimeout(pt); pt = 0; if (!pend) return; const q = pend; pend = null; out({ k: 'u', p: q, pv, pp: sentPv }); sentPv = pv; };
 
   const dropPeer = (id) => {
     others.delete(id); rtt.delete(id);
@@ -64,7 +71,7 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
   }
   function newLink(id, initiator) {
     const link = createLink(initiator, (d) => direct(id, { k: 'sig', d }, true), {
-      onOpen: () => { out({ k: 'f', p: mine }); notify(); },
+      onOpen: () => { full(false); notify(); },
       onMessage: (raw) => recv(raw),
       onClose: () => {
         if (links.get(id) === link) links.delete(id);
@@ -77,7 +84,7 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
   }
 
   // We heard from a peer we have no snapshot of (e.g. we reconnected): ask, at most every 2 s.
-  const askFull = (o) => { if (o.full) return; const now = Date.now(); if (now - (o.asked || 0) > 2000) { o.asked = now; full(true); } };
+  const askFull = (o, force) => { if (o.full && !force) return; const now = Date.now(); if (now - (o.asked || 0) > 2000) { o.asked = now; full(true); } };
 
   function recv(raw) {
     if (dead || typeof raw !== 'string' || raw.length > 300000) return;
@@ -101,9 +108,14 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
     if (!o) { o = { p: {}, seen: 0, full: false, s: 0 }; others.set(m.id, o); }
     o.seen = Date.now();
     if (typeof m.s === 'number') { if (m.s <= o.s) return; o.s = m.s; }
-    if (m.k === 'f') { o.p = {}; merge(o.p, m.p); o.full = true; if (m.hello) full(false); notify(); }
-    else if (m.k === 'u') { merge(o.p, m.p); askFull(o); notify(); }
-    else if (m.k === 'b') askFull(o);
+    if (m.k === 'f') { o.p = {}; merge(o.p, m.p); o.full = true; o.pv = m.pv; if (m.hello) full(false); notify(); }
+    else if (m.k === 'u') {
+      merge(o.p, m.p);
+      if (o.full && m.pp !== o.pv) askFull(o, true); // we missed a change in between
+      else o.pv = m.pv;
+      askFull(o); notify();
+    }
+    else if (m.k === 'b') askFull(o, o.full && typeof m.pv === 'number' && m.pv !== o.pv);
     maybeLink(m.id);
   }
 
@@ -111,7 +123,7 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
     const now = Date.now();
     if (now - lastHb < HB_MS) return;
     lastHb = now;
-    out({ k: 'b' });
+    out({ k: 'b', pv: sentPv });
     for (const [id, o] of others) {
       if (now - o.seen > STALE_MS) { dropPeer(id); continue; }
       const l = links.get(id);
@@ -129,7 +141,7 @@ export function createRoom(bus, myId, { p2p = true } = {}) {
     transport: bus.name,
     /** Merge q into my presence and broadcast the change (batched ~50 ms). */
     presence(q) {
-      merge(mine, q);
+      merge(mine, q); pv++;
       if (!pend) pendAt = performance.now();
       pend = Object.assign(pend || {}, q);
       if (!pt) pt = setTimeout(flush, 50);
