@@ -19,7 +19,10 @@ import { PRE, safeAv, shrink } from '../ui/avatars.js';
 import { show, banner } from '../ui/screens.js';
 import { joinNetRoom } from '../net/index.js';
 import { S, isAuth } from './state.js';
-import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock, removePlayer, activeIdx, choosePen } from './match.js';
+import { newGame, placePens, startMatch, doFlick, showResult, onEvent, clearTimers, resetSimClock, removePlayer, activeIdx, choosePen, shotFx, forfeitTo, hooks } from './match.js';
+import { MAX_TOUR, newTournament, standings, readTournament } from '../core/tournament.js';
+import { saveTournament } from '../ui/board.js';
+import { COL } from '../core/constants.js';
 
 const VERSION_MSG = 'Someone is on a different version of Pen Clash. Everyone: refresh the page (Ctrl+Shift+R or pull down to reload), then try again.';
 const HOST_KEEPALIVE = 1, HOST_MIN_GAP = 0.1, FLICK_RESEND_MS = 800, RESYNC_MS = 2500;
@@ -51,6 +54,8 @@ export function leaveNet() {
     S.net = null;
   }
   $('#startBtn').hidden = true;
+  $('#tourBox').hidden = true;
+  $('#tableBtn').hidden = true;
   $('#lobbyList').innerHTML = '';
   $('#lobbyArena').textContent = '';
 }
@@ -97,6 +102,9 @@ function backToLobby(msg) {
   const net = S.net;
   if (!net) return;
   net.started = false; net.ids = []; net.hostId = null; net.lobbySig = '';
+  if (net.role === 'host') { clearTimeout(net.tourTm); net.tour = null; net.nr.presence({ st: null }).catch(() => {}); }
+  net.seenTour = null;
+  $('#tableBtn').hidden = true; $('#standings').hidden = true;
   clearTimers();
   S.G = null;
   $('#result').hidden = true;
@@ -123,7 +131,7 @@ function renderLobby(P) {
   if (sig === net.lobbySig) return;
   net.lobbySig = sig;
   $('#lobbyList').innerHTML = list.map((p, k) => {
-    const pr = p.presence, old = pr.v !== PROTOCOL, seat = k < MAX_PLAYERS ? '' : ' · will watch';
+    const pr = p.presence, old = pr.v !== PROTOCOL, seat = k < MAX_PLAYERS ? '' : k < MAX_TOUR ? ' · tournaments only' : ' · will watch';
     return `<li><img src="${safeAv(pr.av, PRE[k % PRE.length])}" alt=""><span>${esc(String(pr.name || 'Player').slice(0, 14))}${p.sameTab ? ' (you)' : ''}${pr.role === 'host' ? ' · host' : ''}${old ? ' · needs refresh' : seat}</span></li>`;
   }).join('');
   if (host) $('#lobbyArena').textContent = 'Arena: ' + arenaById(host.presence.ar).name;
@@ -132,6 +140,9 @@ function renderLobby(P) {
     $('#startBtn').hidden = false;
     $('#startBtn').disabled = ready < 1;
     $('#startBtn').textContent = ready < 1 ? 'Waiting for players…' : `Start match (${Math.min(ready + 1, MAX_PLAYERS)} players)`;
+    $('#tourBox').hidden = ready < 1;
+    const n = Math.min(ready + 1, MAX_TOUR);
+    $('#tourBtn').textContent = `Start tournament (${n} players, ${(n * (n - 1)) / 2} ${n === 2 ? 'match' : 'matches'})`;
     if (list.some((p) => p.presence.v !== PROTOCOL)) stat(VERSION_MSG);
   } else if (host) {
     stat(host.presence.v !== PROTOCOL ? VERSION_MSG : 'Connected. Waiting for the host to start the match…');
@@ -164,31 +175,156 @@ function onPeers(ch) {
 const remotePl = (pr, local) => ({ name: String(pr.name || 'Player').slice(0, 14), pen: clamp(pr.pen | 0, 0, 5), av: safeAv(pr.av), local });
 
 /* ---------- host ---------- */
+const readyGuests = () => lobbyPlayers(lastPeers).filter((p) => !p.sameTab && p.presence.role === 'guest' && p.presence.v === PROTOCOL);
+
 export function hostStartMatch() {
   const net = S.net;
   if (!net || net.role !== 'host' || net.started) return;
-  const guests = lobbyPlayers(lastPeers).filter((p) => !p.sameTab && p.presence.role === 'guest' && p.presence.v === PROTOCOL).slice(0, MAX_PLAYERS - 1);
+  const guests = readyGuests().slice(0, MAX_PLAYERS - 1);
   if (!guests.length) return;
-  net.ids = [net.me, ...guests.map((g) => g.peer)];
+  startOnlineMatch([net.me, ...guests.map((g) => g.peer)], 3);
+}
+
+/** Host: start a match between the given peers (the host may or may not be one of them). */
+function startOnlineMatch(ids, target) {
+  const net = S.net;
+  net.ids = ids;
   net.started = true;
-  for (const g of guests) { net.lastFl[g.peer] = num(g.presence.fl && g.presence.fl.n, 0, 1e15); net.lastRm[g.peer] = num(g.presence.rm, 0, 1e15); }
-  newGame('online', [{ ...S.cfg[0], local: true }, ...guests.map((g) => remotePl(g.presence, false))], S.arena);
-  S.G.me = 0;
-  $('#startBtn').hidden = true;
+  const pl = ids.map((id) => {
+    if (id === net.me) return { ...S.cfg[0], local: true };
+    const g = lastPeers.find((p) => p.peer === id), pr = (g && g.presence) || {};
+    // Only flicks and rematch requests sent from now on count.
+    net.lastFl[id] = Math.max(net.lastFl[id] || 0, num(pr.fl && pr.fl.n, 0, 1e15));
+    net.lastRm[id] = Math.max(net.lastRm[id] || 0, num(pr.rm, 0, 1e15));
+    return remotePl(pr, false);
+  });
+  newGame('online', pl, S.arena);
+  S.G.me = ids.indexOf(net.me);
+  S.G.target = target;
+  $('#startBtn').hidden = true; $('#tourBox').hidden = true; $('#standings').hidden = true;
   wake(); show('game'); stat('');
   startMatch();
+}
+
+/* ---------- tournaments (host) ---------- */
+let tourTarget = 2;
+export function setTourTarget(n) { tourTarget = n; }
+
+export function hostStartTournament() {
+  const net = S.net;
+  if (!net || net.role !== 'host' || net.started) return;
+  const guests = readyGuests().slice(0, MAX_TOUR - 1);
+  if (!guests.length) return;
+  const members = [{ id: net.me, name: S.cfg[0].name }, ...guests.map((g) => ({ id: g.peer, name: String(g.presence.name || 'Player').slice(0, 14) }))];
+  net.tour = newTournament(members, tourTarget);
+  nextTourMatch();
+}
+
+const present = (id) => id === S.net.me || lastPeers.some((p) => p.peer === id);
+
+/** Play the next fixture, settling any where a player has left. */
+function nextTourMatch() {
+  const net = S.net, t = net && net.tour;
+  if (!t) return;
+  while (t.i < t.s.length) {
+    const [a, b] = t.s[t.i], pa = present(t.m[a].id), pb = present(t.m[b].id);
+    if (pa && pb) { startOnlineMatch([t.m[a].id, t.m[b].id], t.tg); return; }
+    t.r.push({ a, b, w: pa ? a : pb ? b : -1, sa: pa ? t.tg : 0, sb: pb ? t.tg : 0 });
+    t.i++;
+  }
+  t.done = true;
+  if (S.G) S.G.dirty = true;
+  showTourResult();
+}
+
+/** Host: a tournament match just ended. */
+function tourMatchEnded(G) {
+  const net = S.net, t = net && net.tour;
+  if (!t || t.done || t.i >= t.s.length) return;
+  const [a, b] = t.s[t.i];
+  t.r.push({ a, b, w: G.winner === 0 ? a : b, sa: G.sc[0], sb: G.sc[1] });
+  t.i++;
+  if (t.i >= t.s.length) { t.done = true; G.dirty = true; showTourResult(); return; }
+  G.dirty = true;
+  showTourResult();
+  clearTimeout(net.tourTm);
+  net.tourTm = setTimeout(() => { if (S.net === net && net.tour === t) nextTourMatch(); }, 7000);
+}
+
+/** Called once at startup (not at import time: match.js and this module import each other). */
+export function initOnline() {
+  hooks.end = (G) => { if (G.mode === 'online' && isAuth() && S.net && S.net.tour) tourMatchEnded(G); };
+  hooks.result = () => showTourResult();
+}
+
+/** The tournament this device knows about (host: its own, guest: from the host). */
+const curTour = () => (S.net ? S.net.tour || S.net.seenTour || null : null);
+
+function tourTableHTML(t) {
+  const rows = standings(t);
+  const fixtures = t.s.map(([a, b], k) => {
+    const r = t.r[k];
+    const res = r ? (r.w < 0 ? 'void' : `${r.sa}–${r.sb}`) : k === t.i && !t.done ? 'playing' : '';
+    return `<li class="${k === t.i && !t.done ? 'now' : r ? 'done' : ''}"><span>${esc(t.m[a].name)} vs ${esc(t.m[b].name)}</span><span>${res}</span></li>`;
+  }).join('');
+  return `<table class="ttable"><thead><tr><th>#</th><th>Player</th><th class="n">P</th><th class="n">W</th><th class="n">L</th><th class="n">Rounds</th><th class="n">Pts</th></tr></thead><tbody>${rows
+    .map((r, k) => `<tr class="${k === 0 && t.r.length ? 'top' : ''}"><td>${k + 1}</td><td><span class="sw" style="background:${COL[r.i % COL.length]}"></span>${esc(r.name)}</td><td class="n">${r.p}</td><td class="n">${r.w}</td><td class="n">${r.l}</td><td class="n">${r.rw}–${r.rl}</td><td class="n">${r.pts}</td></tr>`)
+    .join('')}</tbody></table><ul class="fixtures">${fixtures}</ul>`;
+}
+
+/** Show the table on the result screen (between matches and at the end). */
+function showTourResult() {
+  const t = curTour();
+  if (!t) return;
+  $('#tableBtn').hidden = false;
+  if ($('#result').hidden && !t.done) return;
+  $('#rTable').innerHTML = tourTableHTML(t);
+  if (t.done) {
+    const champ = standings(t)[0];
+    $('#result').hidden = false;
+    $('#rTitle').textContent = '🏆 ' + champ.name + ' wins the tournament!';
+    $('#rScore').textContent = '';
+    $('#rNote').textContent = '';
+    $('#rAgain').hidden = !(S.net && S.net.role === 'host');
+    $('#rAgain').textContent = 'Back to lobby';
+    saveTournament(t.id, champ.name, S.net && S.net.role === 'host');
+  } else {
+    const nx = t.s[t.i];
+    $('#rAgain').hidden = true;
+    $('#rNote').textContent = nx ? `Next: ${t.m[nx[0]].name} vs ${t.m[nx[1]].name}. Starting in a few seconds…` : '';
+  }
+}
+
+export function showStandings() {
+  const t = curTour();
+  if (!t) return;
+  $('#stTitle').textContent = t.done ? 'Final table' : `Tournament table · match ${Math.min(t.i + 1, t.s.length)} of ${t.s.length}`;
+  $('#stTable').innerHTML = tourTableHTML(t);
+  $('#standings').hidden = false;
+}
+
+/** Rematch button: in a finished tournament it takes the host back to the lobby. */
+export function tourBackToLobby() {
+  const t = curTour();
+  if (!t || !t.done) return false;
+  backToLobby('Tournament finished. Start another match or tournament.');
+  return true;
 }
 
 function hostPeers(P) {
   const net = S.net, G = S.G;
   if (!G) return;
-  for (let k = 1; k < net.ids.length; k++) {
-    if (G.pl[k].gone) continue;
+  for (let k = 0; k < net.ids.length; k++) {
+    if (net.ids[k] === net.me || G.pl[k].gone) continue;
     const g = P.find((p) => p.peer === net.ids[k]);
     if (!g) {
       banner(G.pl[k].name + ' left', 1500);
       removePlayer(k);
-      if (activeIdx().length < 2) { backToLobby('Everyone else left. Waiting for players to join with the code…'); return; }
+      if (activeIdx().length < 2) {
+        // In a tournament the remaining player wins this match; otherwise back to the lobby.
+        if (net.tour && G.phase !== 'over') forfeitTo(activeIdx()[0] ?? 0);
+        else if (!net.tour) { backToLobby('Everyone else left. Waiting for players to join with the code…'); return; }
+      }
       continue;
     }
     hostRead(k, g);
@@ -219,7 +355,7 @@ function hostState() {
   const G = S.G, net = S.net;
   const aim = G.phase === 'aim' ? G.aim || G.raim : null;
   return {
-    m: G.mid, ar: G.arena.id, ids: net.ids, pl: G.pl.map((p) => [p.name, p.pen]), gone: G.pl.map((p) => (p.gone ? 1 : 0)),
+    m: G.mid, ar: G.arena.id, ids: net.ids, tg: G.target, tour: net.tour || null, pl: G.pl.map((p) => [p.name, p.pen]), gone: G.pl.map((p) => (p.gone ? 1 : 0)),
     ph: G.phase, t: G.turn, sc: G.sc, rd: G.rd, w: G.winner, b: G.msg || null, fa: net.lastFl,
     p: G.pens.map(packPen), bo: packBoosters(G.env), ink: G.env.flood,
     pk: G.pick ? { rd: G.pick.rd, last: G.pick.last, picks: G.pick.picks, left: Math.max(0, G.pick.until - Date.now()) } : null,
@@ -284,6 +420,7 @@ function startReplay(sh) {
   const i = clamp(sh.i | 0, 0, G.pens.length - 1);
   armShot(G.pens[i]);
   flickPen(G.pens[i], num(sh.t, -0.45, 0.45), num(sh.jx, -MAXJ, MAXJ), num(sh.jy, -MAXJ, MAXJ));
+  shotFx(G.pens[i]);
   G.sim = true; G.simEnd = 0; resetSimClock();
   sfx.flick();
 }
@@ -299,6 +436,7 @@ export function guestFlick(a) {
   snapToAuth();
   armShot(G.pens[a.i]);
   flickPen(G.pens[a.i], clamp(pf.t, -0.45, 0.45), pf.jx, pf.jy);
+  shotFx(G.pens[a.i]);
   G.sim = true; G.simEnd = 0; G.pred = pf.n; G.phase = 'moving'; resetSimClock();
   sfx.flick();
 }
@@ -323,6 +461,7 @@ export function guestAim(aim) {
 function guestRead(h, P) {
   const net = S.net;
   const st = h.presence.st;
+  if (!st && net.started && h.presence.role === 'host') { backToLobby('The host is back in the lobby.'); return; }
   if (!st || typeof st !== 'object' || !Array.isArray(st.p) || !Array.isArray(st.ids)) return;
   const n = st.ids.length;
   if (n < 2 || n > MAX_PLAYERS || st.p.length !== n || !Array.isArray(st.pl) || st.pl.length !== n) return;
@@ -332,17 +471,21 @@ function guestRead(h, P) {
   if (net.pf && typeof myAck === 'number' && myAck >= net.pf.n) net.pf = null;
 
   const avOf = (k) => {
-    const pr = k === 0 ? h.presence : (P.find((p) => p.peer === st.ids[k]) || {}).presence;
+    const pr = (P.find((p) => p.peer === st.ids[k]) || {}).presence;
     return safeAv(pr && pr.av, PRE[k % PRE.length]);
   };
+  const tour = readTournament(st.tour);
+  const newTour = tour && (!net.seenTour || net.seenTour.id !== tour.id || net.seenTour.r.length !== tour.r.length || net.seenTour.done !== tour.done);
+  net.seenTour = tour;
   let G = S.G;
   if (!G || G.mid !== st.m) {
     const pl = st.pl.map((q, k) => ({
       name: String((Array.isArray(q) && q[0]) || 'Player').slice(0, 14), pen: clamp((Array.isArray(q) && q[1]) | 0, 0, 5), av: avOf(k), local: k === seat,
     }));
-    if (seat > 0) Object.assign(pl[seat], { ...S.cfg[0], local: true });
+    if (seat >= 0) Object.assign(pl[seat], { ...S.cfg[0], local: true });
     newGame('online', pl, st.ar);
-    G = S.G; G.mid = st.m; G.me = seat > 0 ? seat : -1; G.lastRd = -1;
+    G = S.G; G.mid = st.m; G.me = seat; G.lastRd = -1; G.target = Math.min(3, Math.max(1, st.tg | 0 || 3));
+    $('#standings').hidden = true;
     wake(); placePens(); net.started = true; show('game'); stat('');
   }
   st.pl.forEach((q, k) => {
@@ -352,13 +495,13 @@ function guestRead(h, P) {
   if (Array.isArray(st.gone)) st.gone.forEach((g, k) => { if (G.pl[k]) G.pl[k].gone = !!g; });
   // New round (or new pens picked): put fresh pens on their starting spots.
   st.pl.forEach((q, k) => { if (k !== G.me && Array.isArray(q)) G.pl[k].pen = clamp(q[1] | 0, 0, PENS.length - 1); });
-  if (G.me > 0 && Array.isArray(st.pl[G.me])) G.pl[G.me].pen = clamp(st.pl[G.me][1] | 0, 0, PENS.length - 1);
+  if (G.me >= 0 && Array.isArray(st.pl[G.me])) G.pl[G.me].pen = clamp(st.pl[G.me][1] | 0, 0, PENS.length - 1);
   const layout = st.rd + ':' + G.pl.map((p) => p.pen).join(',');
   if (st.ph !== 'pick' && layout !== G.layout) { G.layout = layout; placePens(); G.sim = false; G.pred = 0; }
 
   const ph = ['aim', 'moving', 'between', 'over', 'idle', 'pick'].includes(st.ph) ? st.ph : 'idle';
   G.turn = clamp(st.t | 0, 0, n - 1);
-  G.sc = G.pl.map((_, k) => num(Array.isArray(st.sc) ? st.sc[k] : 0, 0, WIN_ROUNDS));
+  G.sc = G.pl.map((_, k) => num(Array.isArray(st.sc) ? st.sc[k] : 0, 0, G.target || WIN_ROUNDS));
   G.rd = num(st.rd, 1, 99, 1);
   G.auth = st.p.map((q) => (Array.isArray(q) ? { x: num(q[0], -2000, 3000), y: num(q[1], -2000, 3000), a: num(q[2], -1e7, 1e7), alive: !!q[3], raw: q } : null));
   G.authEnv = { bo: unpackBoosters(st.bo), ink: readFlood(st.ink) };
@@ -366,7 +509,7 @@ function guestRead(h, P) {
   const pk = st.pk;
   if (ph === 'pick' && pk && Array.isArray(pk.picks) && pk.picks.length === n) {
     const picks = pk.picks.map((v) => (typeof v === 'number' ? v | 0 : -1));
-    if (net.myPick && net.myPick.rd === pk.rd && G.me > 0 && picks[G.me] < 0) picks[G.me] = net.myPick.pen;
+    if (net.myPick && net.myPick.rd === pk.rd && G.me >= 0 && picks[G.me] < 0) picks[G.me] = net.myPick.pen;
     G.pick = { rd: pk.rd | 0, last: Array.isArray(pk.last) ? pk.last.map((v) => v | 0) : picks.map(() => -1), picks, until: Date.now() + num(pk.left, 0, 60000) };
   } else G.pick = null;
 
@@ -390,7 +533,8 @@ function guestRead(h, P) {
   G.raim = Array.isArray(a) && G.phase === 'aim' && (a[0] | 0) !== G.me && (a[0] | 0) === G.turn
     ? { i: a[0] | 0, t: num(a[1], -0.45, 0.45), jx: num(a[2], -MAXJ, MAXJ), jy: num(a[3], -MAXJ, MAXJ) } : null;
   if (G.phase === 'over' && $('#result').hidden) { G.winner = clamp(st.w | 0, 0, n - 1); showResult(); }
-  else if (G.phase !== 'over') $('#result').hidden = true;
+  else if (G.phase !== 'over' && !(tour && tour.done)) $('#result').hidden = true;
+  if (tour) { $('#tableBtn').hidden = false; if (newTour) showTourResult(); }
 }
 
 /** Per-frame guest update: ease pens to the host's positions when no replay is running. */

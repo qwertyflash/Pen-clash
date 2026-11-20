@@ -12,11 +12,15 @@ import { sfx } from '../ui/audio.js';
 import { BOTAV, safeAv } from '../ui/avatars.js';
 import { resetInk, splat } from '../ui/arena.js';
 import { show, banner } from '../ui/screens.js';
+import { saveMatch } from '../ui/board.js';
 import { sparks } from './render.js';
 import { S, isAuth } from './state.js';
 import { netTick } from './online.js';
 
 const nm = (i) => S.G.pl[i].name;
+
+/** Hooks for other modules. end(G) runs once on the authoritative device when a match ends. */
+export const hooks = { end: null, result: null };
 const BOT_NAMES = ['Inkbot', 'Blotbot', 'Smudgebot'];
 export const PICK_MS = 15000;
 const BOOSTER_CHANCE = 0.45; // chance a new booster pops up after each shot
@@ -26,7 +30,7 @@ export function newGame(mode, pl, arenaId) {
   const arena = arenaById(arenaId);
   S.G = {
     mode, pl, arena, env: { arena, boosters: [], flood: null },
-    pens: [], turn: 0, first: 0, phase: 'idle', sc: pl.map(() => 0), rd: 1, mover: 0,
+    pens: [], turn: 0, first: 0, phase: 'idle', sc: pl.map(() => 0), rd: 1, mover: 0, target: WIN_ROUNDS,
     aim: null, raim: null, slow: 0, shake: 0, parts: [], pick: null,
     mid: (Math.random() * 1e9) | 0, msgId: 0, msg: null, me: -1, winner: -1, dirty: true, sig: '',
     // online: the host's last shot, and a guest's local replay of it
@@ -149,6 +153,7 @@ export function doFlick(i, t, jx, jy, fl = 0) {
   const p = G.pens[i];
   armShot(p);
   flickPen(p, t, jx, jy);
+  shotFx(p);
   G.mover = i; G.phase = 'moving'; G.aim = null; G.raim = null; G.dirty = true;
   sfx.flick();
   return true;
@@ -194,10 +199,27 @@ function endRound(w, msg) {
   say(w >= 0 ? msg : 'Everyone fell! Replay the round', 1500);
   clearTimeout(G.tm); clearTimeout(G.tm2);
   G.tm = setTimeout(() => {
-    if (w >= 0 && G.sc[w] >= WIN_ROUNDS) { G.phase = 'over'; G.winner = w; G.dirty = true; showResult(); return; }
+    if (w >= 0 && G.sc[w] >= G.target) { endMatch(w); return; }
     if (w >= 0) { G.rd++; G.first = nextSeat(G.first, (j) => !G.pl[j].gone); startPick(); }
     else startRound();
   }, 1700);
+}
+
+function endMatch(w) {
+  const G = S.G;
+  clearTimeout(G.tm); clearTimeout(G.tm2);
+  G.phase = 'over'; G.winner = w; G.aim = G.raim = null; G.pick = null; G.dirty = true;
+  showResult();
+  if (hooks.end) hooks.end(G);
+}
+
+/** End the match now with w as the winner (e.g. everyone else left a tournament match). */
+export function forfeitTo(w) {
+  const G = S.G;
+  if (!G || G.phase === 'over') return;
+  G.sc[w] = Math.max(G.sc[w], G.target);
+  say(nm(w) + ' wins by forfeit', 1500);
+  endMatch(w);
 }
 
 /** An online player disconnected mid-match: take their pen out and carry on. */
@@ -236,11 +258,47 @@ function maybeBot() {
   }, 650);
 }
 
+/* ---------- effects ---------- */
+const ring = (x, y, c, r1, opts = {}) => (S.G.rings || (S.G.rings = [])).push({ x, y, c, r0: 10, r1, l: opts.l || 0.5, m: opts.l || 0.5, w: opts.w || 8, bolt: !!opts.bolt, seed: Math.random() * 6 });
+const flash = (c, l = 0.25) => { S.G.flash = { c, l, m: l }; };
+
+/** A Speed or Fire shot was just fired from pen p (called on every screen). */
+export function shotFx(p) {
+  const G = S.G;
+  if (!p.speedy && !p.fiery) return;
+  G.boostHits = 0;
+  if (p.fiery) {
+    sparks(p.x, p.y, 40, ['#ff7a1a', '#ffe23d', '#ff3b1f'], 520);
+    ring(p.x, p.y, '#ff7a1a', 140, { w: 10 }); flash('#ff7a1a', 0.2);
+    sfx.roar(); banner('FIRE SHOT!', 900);
+  } else {
+    sparks(p.x, p.y, 30, ['#ffe23d', '#ffffff'], 600);
+    ring(p.x, p.y, '#ffe23d', 120, { bolt: true }); flash('#fff6a8', 0.15);
+    sfx.whoosh(); banner('SPEED SHOT!', 900);
+  }
+}
+
 /** Visual + sound feedback. Runs on every screen from its own simulation or replay. */
 export function onEvent(e) {
   const G = S.G;
   if (e.t === 'hit') {
     if (e.j < 40) return;
+    // Boosted contact: show it big the first couple of times in a shot.
+    if ((e.fire || e.speed || e.ice) && (G.boostHits = (G.boostHits || 0) + 1) <= 2) {
+      if (e.ice) {
+        sparks(e.x, e.y, 26, ['#bff3ff', '#7fe3ff', '#ffffff'], 460); ring(e.x, e.y, '#bff3ff', 90, { w: 6 });
+        sfx.clink(); if (G.boostHits === 1) banner('BLOCKED!', 800);
+      } else if (e.fire) {
+        sparks(e.x, e.y, 50, ['#ff7a1a', '#ffe23d', '#ff3b1f', '#0b0b14'], 720);
+        ring(e.x, e.y, '#ff7a1a', 200, { w: 12, l: 0.6 }); ring(e.x, e.y, '#ffe23d', 120, { w: 6, l: 0.45 });
+        flash('#ff7a1a', 0.3); G.shake = Math.min(30, G.shake + 14); sfx.boom();
+        if (G.boostHits === 1) banner('BOOM!', 800);
+      } else {
+        sparks(e.x, e.y, 30, ['#ffe23d', '#ffffff', '#1631b4'], 640);
+        ring(e.x, e.y, '#ffe23d', 110, { bolt: true }); flash('#fff6a8', 0.15); sfx.zap();
+        if (G.boostHits === 1) banner('ZAP!', 700);
+      }
+    }
     const cols = e.fire ? ['#ff7a1a', '#ffe23d', '#ff3b1f', '#0b0b14'] : [...new Set(G.pens.map((p) => p.d.ink)), '#ffe23d', '#0b0b14'];
     sparks(e.x, e.y, Math.min(e.fire ? 34 : 22, 6 + e.j / 50), cols, e.fire ? 560 : 420);
     G.shake = Math.min(e.fire ? 22 : 16, G.shake + e.j / (e.fire ? 45 : 70));
@@ -284,8 +342,17 @@ export function showResult() {
   $('#rTitle').textContent = (G.mode === 'bot' && w === 0) || G.me === w ? 'You win!' : p.name + ' wins!';
   $('#rScore').textContent = G.sc.join(' – ');
   $('#rNote').textContent = '';
+  $('#rTable').innerHTML = '';
+  $('#rAgain').textContent = 'Rematch';
   $('#rAgain').hidden = G.mode === 'online' && G.me < 0;
   $('#result').hidden = false;
+  // Leaderboard: players who took part (not bots). Online, the host also shares it.
+  const online = G.mode === 'online', host = online && isAuth();
+  if (!online || G.me >= 0 || host) {
+    const players = G.pl.map((q, i) => ({ name: q.name, won: i === w, rounds: G.sc[i], bot: q.bot })).filter((q) => !q.bot).map(({ bot, ...q }) => q);
+    saveMatch(online ? 'm' + G.mid : 'o' + G.mid + Date.now(), players, !online || host);
+  }
+  if (hooks.result) hooks.result(G);
   sfx.win();
   sparks(CX, CY, 40, ['#ff4d8d', '#ffe23d', '#22e1c6', '#1631b4'], 700);
 }

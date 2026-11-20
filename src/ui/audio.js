@@ -32,6 +32,12 @@ export const sfx = {
   win: () => [523, 659, 784, 1046].forEach((f, i) => setTimeout(() => tone(f, 0.2, 'triangle', 0.14), i * 110)),
   tick: () => tone(1300, 0.03, 'triangle', 0.05),
   pickup: () => [660, 990, 1320].forEach((f, i) => setTimeout(() => tone(f, 0.09, 'triangle', 0.1), i * 60)),
+  // Booster shots and hits
+  whoosh: () => { tone(300, 0.35, 'sawtooth', 0.09, 4); tone(900, 0.25, 'triangle', 0.06, 2.2); },
+  roar: () => { tone(110, 0.5, 'sawtooth', 0.16, 1.8); setTimeout(() => tone(220, 0.35, 'square', 0.08, 0.5), 60); },
+  boom: () => { tone(70, 0.6, 'square', 0.22, 0.35); tone(180, 0.3, 'sawtooth', 0.14, 0.3); },
+  zap: () => { [1600, 2400, 1200].forEach((f, i) => setTimeout(() => tone(f, 0.06, 'square', 0.07, 0.5), i * 35)); },
+  clink: () => { tone(2200, 0.18, 'triangle', 0.1, 0.9); setTimeout(() => tone(3100, 0.22, 'sine', 0.08), 50); },
   crack: () => { tone(160, 0.35, 'sawtooth', 0.2, 0.3); setTimeout(() => tone(90, 0.6, 'square', 0.12, 0.4), 80); },
 };
 
